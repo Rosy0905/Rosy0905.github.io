@@ -248,6 +248,15 @@
             padding: 4px 18px; border-radius: 40px; font-weight: 500; cursor: pointer;
         }
 
+        .learn-progress-tip {
+            font-size: 0.85rem;
+            color: #2a5a2a;
+            background: #eaf7ea;
+            padding: 4px 14px;
+            border-radius: 40px;
+            border: 1px solid #a5d6a7;
+            display: inline-block;
+        }
         @media (max-width:700px) {
             .top-nav .brand { font-size:1.2rem; }
             .nav-tabs button { font-size:0.75rem; padding:4px 12px; }
@@ -275,7 +284,7 @@
     <div id="page-home" class="page active">
         <div class="home-grid">
             <div class="home-card" data-page="learn"><div class="icon">📖</div><div class="label">学习模式</div><div class="desc">新词 & 标记</div></div>
-            <div class="home-card" data-page="review"><div class="icon">🔁</div><div class="label">智能复习</div><div class="desc">红色优先 · 到期提醒</div></div>
+            <div class="home-card" data-page="review"><div class="icon">🔁</div><div class="label">智能复习</div><div class="desc">红色优先 · 仅已学习</div></div>
             <div class="home-card" data-page="overview"><div class="icon">📋</div><div class="label">概览</div><div class="desc">全部 · 待背 · 复习中 · 生词本</div></div>
         </div>
         <div class="stats-grid" id="statsGrid">
@@ -331,7 +340,10 @@
             <div class="jump-box"><label for="jumpInput">跳转</label><input type="number" id="jumpInput" min="1" value="1"><button id="jumpBtn">Go</button></div>
             <button class="primary" id="nextBtn">下一张 ▶</button>
         </div>
-        <div class="progress-bar-wrapper"><div class="progress-bar-fill" id="progressFill" style="width:0%;"></div></div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+            <div class="progress-bar-wrapper" style="flex:1; margin-right:12px;"><div class="progress-bar-fill" id="progressFill" style="width:0%;"></div></div>
+            <span class="learn-progress-tip" id="learnPositionTip">📍 已保存位置</span>
+        </div>
     </div>
 
     <!-- 复习页面 -->
@@ -10907,13 +10919,17 @@ const WORDS = [
     // ===== 状态 =====
     const STORAGE_KEY = 'root_word_status_v2';
     const STAR_KEY = 'root_star_words';
+    const LEARN_POS_KEY = 'learn_position_v2';
     let wordStatusStore = loadStore();
     let starSet = loadStarSet();
+    let learnPosition = loadLearnPosition();
 
     function loadStore() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch(e){return {};} }
     function saveStore() { localStorage.setItem(STORAGE_KEY, JSON.stringify(wordStatusStore)); }
     function loadStarSet() { try { return new Set(JSON.parse(localStorage.getItem(STAR_KEY)) || []); } catch(e){return new Set();} }
     function saveStarSet() { localStorage.setItem(STAR_KEY, JSON.stringify([...starSet])); }
+    function loadLearnPosition() { try { return parseInt(localStorage.getItem(LEARN_POS_KEY)) || 0; } catch(e){return 0;} }
+    function saveLearnPosition(pos) { localStorage.setItem(LEARN_POS_KEY, String(pos)); }
 
     function getStatus(cardId, wordIdx) { return (wordStatusStore[cardId]||{})[wordIdx] || null; }
 
@@ -11014,15 +11030,22 @@ const WORDS = [
         const filter = document.getElementById('learnFilter').value;
         learnOrder = buildLearnOrder(filter);
         if(learnOrder.length===0) learnOrder = WORDS.map((_,i)=>i);
-        if(currentLearnIndex>=learnOrder.length) currentLearnIndex=0;
+        // 恢复保存的位置
+        let savedPos = learnPosition;
+        if (savedPos < 0) savedPos = 0;
+        if (savedPos >= learnOrder.length) savedPos = learnOrder.length - 1;
+        currentLearnIndex = savedPos;
         renderLearnCard(currentLearnIndex);
         updateLearnCounter();
+        document.getElementById('learnPositionTip').textContent = `📍 已保存位置: ${currentLearnIndex+1}`;
     }
 
     function renderLearnCard(index){
         if(learnOrder.length===0) { initLearnOrder(); return; }
         if(index<0) index=0; if(index>=learnOrder.length) index=learnOrder.length-1;
         currentLearnIndex=index;
+        saveLearnPosition(currentLearnIndex);
+        document.getElementById('learnPositionTip').textContent = `📍 已保存位置: ${currentLearnIndex+1}`;
         const dataIdx=learnOrder[currentLearnIndex];
         const data=WORDS[dataIdx];
         if(!data) return;
@@ -11106,11 +11129,15 @@ const WORDS = [
     let reviewIndex = 0;
 
     function buildReviewQueue(mode='due'){
+        // 只包含至少有一个单词被标记过的词根
         let items = WORDS.map((data, idx)=>{
             const f=getCardFamiliarity(data.id);
+            // 有任意标记（绿/黄/红）才算已学习
+            const hasLearned = (f.green + f.yellow + f.red) > 0;
             const score = (f.red*3) + (f.yellow*2) + (f.green*1);
-            return {idx, data, f, score};
-        });
+            return {idx, data, f, score, hasLearned};
+        }).filter(item => item.hasLearned);
+
         if(mode==='due'){
             items.sort((a,b)=> {
                 const aLevel = a.f.red>0 ? 3 : (a.f.yellow>0 ? 2 : (a.f.green>0 ? 1 : 0));
@@ -11122,14 +11149,22 @@ const WORDS = [
             items.sort((a,b)=>b.score - a.score);
         }
         reviewQueue = items.map(item=>item.idx);
-        if(reviewQueue.length===0) reviewQueue = WORDS.map((_,i)=>i);
+        if(reviewQueue.length===0) {
+            reviewQueue = WORDS.map((_,i)=>i); // fallback, 但不会发生
+        }
         reviewIndex = 0;
         renderReviewCard();
         updateReviewCounter();
     }
 
     function renderReviewCard(){
-        if(reviewQueue.length===0) { buildReviewQueue(); return; }
+        if(reviewQueue.length===0) { 
+            document.getElementById('reviewCardContainer').innerHTML = `<div class="review-card" style="text-align:center;padding:40px 20px;color:#4a6a4a;">🎉 所有词根都已掌握！继续学习新词吧。</div>`;
+            document.getElementById('reviewProgressFill').style.width='100%';
+            document.getElementById('reviewPrevBtn').disabled=true;
+            document.getElementById('reviewNextBtn').disabled=true;
+            return;
+        }
         if(reviewIndex<0) reviewIndex=0; if(reviewIndex>=reviewQueue.length) reviewIndex=reviewQueue.length-1;
         const dataIdx = reviewQueue[reviewIndex];
         const data = WORDS[dataIdx];
@@ -11424,7 +11459,7 @@ const WORDS = [
 
     function resetAll(){
         if(confirm('重置所有标记和生词本？')){
-            wordStatusStore={}; starSet.clear();
+            wordStatusStore={}; starSet.clear(); learnPosition=0; saveLearnPosition(0);
             saveStore(); saveStarSet();
             if (gameTimer) { clearTimeout(gameTimer); gameTimer = null; }
             updateStats();
