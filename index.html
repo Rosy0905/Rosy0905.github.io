@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Study全项目主站</title>
+
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="icon" href="icons/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+<link rel="mask-icon" href="icons/icon.svg" color="#5C6BC0">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#E5E9F8">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Study全项目主站">
+<meta name="description" content="经济学、英语、数学，考研路上的四个站，收在这一个入口。">
+
+<style>
+  :root{
+    --sky:#DDE4F7;
+    --petal:#5C6BC0;
+    --deep:#2A3577;
+    --core:#FFD54F;
+
+    --ink:#1B2650;
+    --ink-2:#4E5883;
+    --ink-3:#77809F;
+    --line:#DDE4F5;
+
+    /* 四站花色：卡片用带色近白，靠色相区分，靠明度跟背景拉开层次 */
+    --econ-bg:#FBF4FF; --econ-petal:#A86FD1; --econ-line:#6A2C91; --econ-core:#F2C14E; --econ-bd:#EFE0FA;
+    --read-bg:#FFF4F9; --read-petal:#EE7FA9; --read-line:#B84C77; --read-core:#B9DFF2; --read-bd:#FBE0EE;
+    --word-bg:#F6FDF0; --word-petal:#7CB342; --word-line:#33691E; --word-core:#FFF59D; --word-bd:#E4F2D9;
+    --math-bg:#F2FAFE; --math-petal:#6FB5D8; --math-line:#2B6E8F; --math-core:#E8A87D; --math-bd:#DDEDF7;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    min-height:100vh;
+    display:flex;flex-direction:column;
+    justify-content:safe center;
+    padding:clamp(38px,5.4vh,70px) clamp(20px,4vw,48px);
+    background:#E1E5F8;
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Segoe UI','Microsoft YaHei',sans-serif;
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+    position:relative;
+    overflow-x:hidden;
+  }
+  /* 右上角那朵花 */
+  .bloom{
+    position:fixed; right:-205px; top:-185px;
+    width:560px; height:560px;
+    background:url("icons/icon.svg") center/contain no-repeat;
+    opacity:.075; pointer-events:none; z-index:0;
+    transform:rotate(10deg);
+  }
+  main{
+    position:relative;z-index:1;
+    width:100%;max-width:1160px;
+    margin-inline:auto;
+  }
+
+  /* ---------- 头部 ---------- */
+  header{text-align:center;margin-bottom:clamp(30px,4.4vh,52px)}
+  .badge{
+    width:90px;height:90px;margin:0 auto 22px;
+    border-radius:27px;
+    background:var(--sky);
+    box-shadow:
+      0 14px 34px rgba(42,53,119,.18),
+      inset 0 1px 0 rgba(255,255,255,.9),
+      0 0 0 1px rgba(255,255,255,.6);
+  }
+  .badge svg{width:100%;height:100%;border-radius:27px;display:block}
+  h1{
+    font-size:clamp(30px,4.2vw,40px);
+    font-weight:780;letter-spacing:-.025em;line-height:1.15;
+    color:var(--ink);
+  }
+  .lead{
+    margin:22px auto 0;
+    max-width:780px;
+    font-size:clamp(13.5px,1.18vw,14.5px);
+    font-weight:400;
+    line-height:2.1;
+    color:#47517E;
+    letter-spacing:.1em;
+  }
+  .lead em{font-style:normal;display:block}
+  .lead .m{display:none}
+
+  /* ---------- 卡片 ---------- */
+  .grid{
+    display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:clamp(16px,1.7vw,22px);
+  }
+  a.card{
+    display:flex;align-items:center;gap:clamp(18px,1.9vw,24px);
+    padding:clamp(24px,2.3vw,31px) clamp(22px,2.3vw,30px);
+    border-radius:24px;
+    text-decoration:none;color:inherit;
+    border:1px solid var(--bd);
+    background:var(--cbg);
+    box-shadow:0 2px 12px rgba(42,53,119,.05);
+    transition:transform .24s cubic-bezier(.2,.8,.3,1), box-shadow .24s ease, border-color .24s ease;
+  }
+  a.card:hover{
+    transform:translateY(-4px);
+    border-color:var(--cbd);
+    box-shadow:0 16px 34px rgba(42,53,119,.13);
+  }
+  a.card:active{transform:translateY(-1px)}
+
+  .mark{
+    display:block;flex:0 0 74px;width:74px;height:74px;border-radius:21px;
+    overflow:hidden;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.9);
+  }
+  .mark svg{width:100%;height:100%;display:block}
+
+  .txt{flex:1;min-width:0;display:block}
+  .name{
+    display:block;
+    font-size:clamp(16px,1.45vw,17.5px);font-weight:700;letter-spacing:.005em;
+    color:var(--ink);line-height:1.4;
+  }
+  .desc{
+    display:block;margin-top:8px;
+    font-size:clamp(12.5px,1.15vw,13.5px);line-height:1.65;
+    color:#6C7597;letter-spacing:.01em;
+  }
+  .go{
+    display:flex;flex:0 0 38px;width:38px;height:38px;border-radius:50%;
+    background:var(--gobg);color:var(--gocol);border:1px solid var(--gobd);
+    align-items:center;justify-content:center;
+    font-size:15px;font-weight:700;
+    transition:background .22s ease,color .22s ease,border-color .22s ease;
+  }
+  .go svg{
+    width:16px;height:16px;display:block;
+    fill:none;stroke:currentColor;stroke-width:2.6;
+    stroke-linecap:round;stroke-linejoin:round;
+  }
+  a.card:hover .go{background:var(--gocol);color:#fff;border-color:var(--gocol)}
+
+  /* 每张卡的主题色 */
+  .c-econ{--cbg:var(--econ-bg);--bd:var(--econ-bd);--cbd:#D2B4EE;--gobg:#F6EAFE;--gocol:#8B4BB8;--gobd:#EBD8F9;--glow:rgba(168,111,209,.34);--halo:rgba(168,111,209,.14)}
+  .c-read{--cbg:var(--read-bg);--bd:var(--read-bd);--cbd:#F2B4CE;--gobg:#FEEBF4;--gocol:#C05C89;--gobd:#F9D8E7;--glow:rgba(238,127,169,.34);--halo:rgba(238,127,169,.14)}
+  .c-word{--cbg:var(--word-bg);--bd:var(--word-bd);--cbd:#C3E1AF;--gobg:#EFF9E9;--gocol:#4F8F2C;--gobd:#DCF0CF;--glow:rgba(124,179,66,.30);--halo:rgba(124,179,66,.13)}
+  .c-math{--cbg:var(--math-bg);--bd:var(--math-bd);--cbd:#B7DCEB;--gobg:#E9F5FC;--gocol:#3A82A5;--gobd:#D2E9F4;--glow:rgba(111,181,216,.34);--halo:rgba(111,181,216,.14)}
+
+  /* ---------- 页脚 ---------- */
+  footer{
+    margin-top:clamp(64px,11vh,120px);
+    text-align:center;
+  }
+  footer .motto{
+    font-family:'Georgia',-apple-system,'PingFang SC',serif;
+    font-style:italic;
+    font-size:clamp(12px,1.05vw,13.5px);
+    line-height:1.9;
+    letter-spacing:.1em;
+    color:#333E70;
+  }
+  footer .motto .heart{
+    display:inline-block;
+    width:.86em;height:.86em;
+    margin:0 9px 0 7px;
+    vertical-align:-.06em;
+    transform:skewX(-11deg);
+  }
+  footer .motto .heart svg{width:100%;height:100%;display:block;fill:#5C6BC0}
+
+  @media (max-width:900px){
+    .grid{grid-template-columns:1fr}
+  }
+  @media (max-width:760px){
+    body{padding:40px 16px 44px}
+    .bloom{width:340px;height:340px;right:-120px;top:-110px;opacity:.075}
+    header{margin-bottom:30px}
+    .badge{width:78px;height:78px;border-radius:24px;margin-bottom:20px}
+    .badge svg{border-radius:24px}
+    h1{font-size:25px;letter-spacing:-.01em}
+    .lead{margin-top:16px;font-size:12px;line-height:2.05}
+    .lead .m{display:inline}
+    .grid{grid-template-columns:1fr;gap:12px}
+    a.card{padding:15px 16px;border-radius:18px;gap:14px}
+    .mark{flex-basis:52px;width:52px;height:52px;border-radius:15px}
+    .name{font-size:14.5px}
+    .desc{font-size:11.5px;margin-top:5px}
+    .go{flex-basis:28px;width:28px;height:28px;font-size:12px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none !important}}
+
+  /* ================= 数据同步 · 花心处的淡淡小球 ================= */
+  .sync-dock{
+    position:fixed; right:55px; top:75px; z-index:40;
+    width:40px; height:40px;
+  }
+  .sync-orb-btn{
+    position:relative; z-index:3;
+    width:40px; height:40px; border-radius:50%;
+    border:1.5px solid rgba(92,107,192,.38);
+    background:rgba(255,255,255,.72);
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer; padding:0;
+    opacity:.5;
+    box-shadow:0 1px 6px rgba(42,53,119,.10);
+    transition:opacity .25s ease, transform .22s ease, box-shadow .25s ease,
+               border-color .25s ease, background .25s ease;
+  }
+  .sync-orb-btn svg{
+    width:19px; height:19px; display:block;
+    fill:#5C6BC0;
+    transform:skewX(-11deg);
+  }
+  .sync-orb-btn:hover{ opacity:.95; transform:scale(1.06); }
+  .sync-dock.open .sync-orb-btn{
+    opacity:1; background:#fff;
+    border-color:rgba(92,107,192,.6);
+    box-shadow:0 2px 10px rgba(42,53,119,.16);
+  }
+
+  .sync-orb{
+    position:absolute; left:50%; top:50%;
+    width:36px; height:36px; margin-left:-18px; margin-top:-18px;
+    border-radius:50%;
+    border:1.5px solid var(--oc);
+    background:linear-gradient(180deg,#fff 0%,#fff 45%,var(--osoft) 100%);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:1.5px; cursor:pointer; user-select:none;
+    opacity:0; pointer-events:none;
+    transform:translateY(0) scale(.3);
+    transition:transform .4s cubic-bezier(.34,1.56,.64,1), opacity .26s ease;
+  }
+  .sync-orb .orb-ic{ font-size:13px; line-height:1; }
+  .sync-orb .orb-tx{
+    font-size:8.5px; font-weight:700; color:var(--ocd);
+    letter-spacing:.2px; line-height:1;
+  }
+  .sync-dock.open .sync-orb{ opacity:.92; pointer-events:auto; }
+  .sync-dock.open .sync-orb.import{ transform:translateY(-54px) scale(1); }
+  .sync-dock.open .sync-orb.export{ transform:translateY(54px) scale(1); transition-delay:.06s; }
+  .sync-dock.open .sync-orb:hover{ opacity:1; }
+  .sync-dock.open .sync-orb.import:hover{ transform:translateY(-54px) scale(1.09); }
+  .sync-dock.open .sync-orb.export:hover{ transform:translateY(54px) scale(1.09); }
+  .sync-orb.import{ --oc:#E8A8C8; --ocd:#A85A7A; --osoft:#FCEEF4; }
+  .sync-orb.export{ --oc:#B89EE0; --ocd:#6A4A9A; --osoft:#F0EAF8; }
+
+  /* ---------- 同步弹层 ---------- */
+  .sync-overlay{
+    position:fixed; inset:0; z-index:200;
+    background:rgba(42,53,119,.34);
+    backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);
+    display:none; align-items:center; justify-content:center;
+    padding:22px;
+  }
+  .sync-overlay.show{ display:flex; }
+  .sync-box{
+    width:100%; max-width:400px;
+    background:#fff; border-radius:20px;
+    padding:24px 22px 20px;
+    box-shadow:0 24px 60px rgba(42,53,119,.28);
+  }
+  .sync-box-ttl{
+    font-size:16.5px; font-weight:750; color:#2A3577;
+    display:flex; align-items:center; gap:8px;
+  }
+  .sync-box-desc{
+    margin-top:6px; font-size:12px; color:#77809F; line-height:1.7;
+  }
+  .sync-sites{ margin-top:14px; display:flex; flex-direction:column; gap:8px; }
+  .sync-site{
+    display:flex; align-items:center; gap:11px;
+    padding:11px 13px;
+    border:1.5px solid #E6E9F6; border-radius:13px;
+    cursor:pointer; user-select:none;
+    transition:border-color .18s ease, background .18s ease;
+  }
+  .sync-site:hover{ border-color:#C9D2F0; }
+  .sync-site.is-empty{ opacity:.55; cursor:default; }
+  .sync-site input{ display:none; }
+  .sync-tick{
+    flex:0 0 18px; width:18px; height:18px; border-radius:6px;
+    border:1.8px solid #C4CDEA; background:#fff;
+    position:relative; transition:all .18s ease;
+  }
+  .sync-site input:checked + .sync-tick{
+    background:#5C6BC0; border-color:#5C6BC0;
+  }
+  .sync-site input:checked + .sync-tick::after{
+    content:""; position:absolute; left:5px; top:2px;
+    width:4px; height:8px;
+    border:solid #fff; border-width:0 2px 2px 0;
+    transform:rotate(45deg);
+  }
+  .sync-site-txt{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .sync-site-txt b{ font-size:13px; font-weight:680; color:#2A3577; }
+  .sync-site-txt i{ font-style:normal; font-size:11px; color:#8A92B4; }
+  .sync-size{
+    margin-top:12px; font-size:11.5px; color:#77809F;
+  }
+  .sync-size b{ color:#5C6BC0; }
+  .sync-btns{
+    margin-top:16px; display:flex; gap:10px; justify-content:flex-end;
+  }
+  .sync-btn-f{
+    padding:9px 20px; border-radius:20px; border:none;
+    font-size:13px; font-weight:700; font-family:inherit; cursor:pointer;
+    transition:filter .18s ease, transform .18s ease;
+  }
+  .sync-btn-f:active{ transform:scale(.97); }
+  .sync-btn-cancel{ background:#F0F2FA; color:#5F6890; }
+  .sync-btn-cancel:hover{ filter:brightness(.97); }
+  .sync-btn-ok{ background:#5C6BC0; color:#fff; }
+  .sync-btn-ok:hover{ filter:brightness(1.06); }
+  .sync-import-rows{ margin-top:12px; display:flex; flex-direction:column; gap:7px; }
+  .sync-import-row{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:9px 13px; background:#F7F8FD; border-radius:11px;
+    font-size:12.5px;
+  }
+  .sync-import-row b{ color:#2A3577; font-weight:680; }
+  .sync-import-row i{ font-style:normal; color:#8A92B4; font-size:11.5px; }
+
+  .sync-toast{
+    position:fixed; left:50%; bottom:34px; transform:translate(-50%,14px);
+    z-index:300;
+    background:rgba(42,53,119,.92); color:#fff;
+    font-size:12.5px; font-weight:600;
+    padding:10px 20px; border-radius:22px;
+    opacity:0; pointer-events:none;
+    transition:opacity .25s ease, transform .25s ease;
+    max-width:86vw; text-align:center;
+  }
+  .sync-toast.show{ opacity:1; transform:translate(-50%,0); }
+
+  @media (max-width:760px){
+    .sync-dock{ right:32px; top:42px; width:36px; height:36px; }
+    .sync-orb-btn{ width:36px; height:36px; }
+    .sync-orb-btn svg{ width:16px; height:16px; }
+    .sync-orb{ width:32px; height:32px; margin-left:-16px; margin-top:-16px; }
+    .sync-dock.open .sync-orb.import{ transform:translateY(-48px) scale(1); }
+    .sync-dock.open .sync-orb.export{ transform:translateY(48px) scale(1); }
+    .sync-dock.open .sync-orb.import:hover{ transform:translateY(-48px) scale(1.08); }
+    .sync-dock.open .sync-orb.export:hover{ transform:translateY(48px) scale(1.08); }
+  }
+</style>
+</head>
+<body>
+<div class="bloom" aria-hidden="true"></div>
+<main>
+  <header>
+    <div class="badge">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="96" height="96" aria-hidden="true">
+        <rect width="512" height="512" fill="#DDE4F7"/>
+        <g transform="translate(256,256)">
+          <g fill="#5C6BC0" stroke="#2A3577" stroke-width="22" stroke-linejoin="round">
+            <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(0)"/>
+            <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(72)"/>
+            <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(144)"/>
+            <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(216)"/>
+            <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(288)"/>
+          </g>
+          <circle r="46" fill="#FFD54F" stroke="#2A3577" stroke-width="22"/>
+        </g>
+      </svg>
+    </div>
+    <h1>Study全项目主站</h1>
+    <p class="lead">
+      <em>夫夷以近，则游者众；险以远，则至者少。</em>
+      <em>而世之奇伟、瑰怪，非常之观，常在于险远，<br class="m">而人之所罕至焉，故非有志者不能至也。</em>
+    </p>
+  </header>
+
+  <div class="grid">
+    <a class="card c-econ" href="https://rosy0905.github.io/Study-Economics-full/">
+      <span class="mark">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-hidden="true">
+          <rect width="512" height="512" fill="#E0D1EF"/>
+          <g transform="translate(256,256)">
+            <g fill="#A86FD1" stroke="#6A2C91" stroke-width="22" stroke-linejoin="round">
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(0)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(72)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(144)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(216)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(288)"/>
+            </g>
+            <circle r="46" fill="#F2C14E" stroke="#6A2C91" stroke-width="22"/>
+          </g>
+        </svg>
+      </span>
+      <span class="txt">
+        <span class="name">南开经济学 · 知识库</span>
+        <span class="desc">八大模块、学习卡片，考研主线</span>
+      </span>
+      <span class="go"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12h14"/><path d="M12.5 5.5 19 12l-6.5 6.5"/></svg></span>
+    </a>
+
+    <a class="card c-read" href="https://rosy0905.github.io/Study-English-Reading/">
+      <span class="mark">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-hidden="true">
+          <rect width="512" height="512" fill="#F3D3E1"/>
+          <g transform="translate(256,256)">
+            <g fill="#EE7FA9" stroke="#B84C77" stroke-width="22" stroke-linejoin="round">
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(0)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(72)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(144)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(216)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(288)"/>
+            </g>
+            <circle r="46" fill="#B9DFF2" stroke="#B84C77" stroke-width="22"/>
+          </g>
+        </svg>
+      </span>
+      <span class="txt">
+        <span class="name">英语一 · 真题阅读</span>
+        <span class="desc">2010–2026 篇目，做题、复盘、记笔记</span>
+      </span>
+      <span class="go"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12h14"/><path d="M12.5 5.5 19 12l-6.5 6.5"/></svg></span>
+    </a>
+
+    <a class="card c-math" href="https://rosy0905.github.io/Study-Math/">
+      <span class="mark">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-hidden="true">
+          <rect width="512" height="512" fill="#D7E7EF"/>
+          <g transform="translate(256,256)">
+            <g fill="#6FB5D8" stroke="#2B6E8F" stroke-width="22" stroke-linejoin="round">
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(0)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(72)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(144)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(216)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(288)"/>
+            </g>
+            <circle r="46" fill="#E8A87D" stroke="#2B6E8F" stroke-width="22"/>
+          </g>
+        </svg>
+      </span>
+      <span class="txt">
+        <span class="name">数学三 · 错题本</span>
+        <span class="desc">原书题目与答案，错一道记一道</span>
+      </span>
+      <span class="go"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12h14"/><path d="M12.5 5.5 19 12l-6.5 6.5"/></svg></span>
+    </a>
+
+    <a class="card c-word" href="https://rosy0905.github.io/Study-English-Words/">
+      <span class="mark">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-hidden="true">
+          <rect width="512" height="512" fill="#E3F0D9"/>
+          <g transform="translate(256,256)">
+            <g fill="#7CB342" stroke="#33691E" stroke-width="22" stroke-linejoin="round">
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(0)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(72)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(144)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(216)"/>
+              <path d="M0 0 C -62 -52, -66 -130, 0 -148 C 66 -130, 62 -52, 0 0 Z" transform="rotate(288)"/>
+            </g>
+            <circle r="46" fill="#FFF59D" stroke="#33691E" stroke-width="22"/>
+          </g>
+        </svg>
+      </span>
+      <span class="txt">
+        <span class="name">英语一 · 单词速刷</span>
+        <span class="desc">3263 个词按真题考频排好，勾着背</span>
+      </span>
+      <span class="go"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12h14"/><path d="M12.5 5.5 19 12l-6.5 6.5"/></svg></span>
+    </a>
+  </div>
+
+  <footer>
+    <p class="motto">Towards a bright future together<span class="heart"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.8s-7.7-4.7-9.5-9.4C1 7.3 3.3 3.6 6.8 3.6c2.1 0 3.9 1.2 4.5 2.9h1.4c.6-1.7 2.4-2.9 4.5-2.9 3.5 0 5.8 3.7 4.3 7.8-1.8 4.7-9.5 9.4-9.5 9.4z"/></svg></span>Rosy_0</p>
+  </footer>
+</main>
+
+<!-- ============ 数据同步 · 花心处的 dock ============ -->
+<div class="sync-dock" id="syncDock">
+  <div class="sync-orb import" id="syncOrbImport" title="导入数据（从 JSON 文件恢复）" role="button" tabindex="0">
+    <span class="orb-ic">📥</span>
+    <span class="orb-tx">导入</span>
+  </div>
+  <div class="sync-orb export" id="syncOrbExport" title="导出数据（保存为 JSON 文件）" role="button" tabindex="0">
+    <span class="orb-ic">📤</span>
+    <span class="orb-tx">导出</span>
+  </div>
+  <button class="sync-orb-btn" type="button" id="syncOrbBtn" aria-expanded="false" aria-label="数据同步">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.8s-7.7-4.7-9.5-9.4C1 7.3 3.3 3.6 6.8 3.6c2.1 0 3.9 1.2 4.5 2.9h1.4c.6-1.7 2.4-2.9 4.5-2.9 3.5 0 5.8 3.7 4.3 7.8-1.8 4.7-9.5 9.4-9.5 9.4z"/></svg>
+  </button>
+</div>
+<input type="file" id="syncFile" accept=".json,application/json" style="display:none" />
+
+<!-- ============ 导出选择弹层 ============ -->
+<div class="sync-overlay" id="syncExportOverlay">
+  <div class="sync-box" role="dialog" aria-label="导出数据">
+    <p class="sync-box-ttl">📤 导出数据</p>
+    <p class="sync-box-desc">勾选需要备份的站点，四个站的数据会打成一个 JSON 文件。AI 配置里的 API Key 不会写进文件。</p>
+    <div class="sync-sites" id="syncSiteList"></div>
+    <p class="sync-size" id="syncExportSize"></p>
+    <div class="sync-btns">
+      <button class="sync-btn-f sync-btn-cancel" type="button" id="syncExportCancel">取消</button>
+      <button class="sync-btn-f sync-btn-ok" type="button" id="syncExportOk">导出</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 导入确认弹层 ============ -->
+<div class="sync-overlay" id="syncImportOverlay">
+  <div class="sync-box" role="dialog" aria-label="导入数据">
+    <p class="sync-box-ttl">📥 导入数据</p>
+    <p class="sync-box-desc">备份里带的记录会整块覆盖本机对应数据，本机有、备份里没有的不动。AI 配置会保留本机已有的 API Key。</p>
+    <div class="sync-import-rows" id="syncImportSites"></div>
+    <div class="sync-btns">
+      <button class="sync-btn-f sync-btn-cancel" type="button" id="syncImportCancel">取消</button>
+      <button class="sync-btn-f sync-btn-ok" type="button" id="syncImportOk">导入</button>
+    </div>
+  </div>
+</div>
+
+<div class="sync-toast" id="syncToast" role="status"></div>
+
+<script src="sync-hub.js"></script>
+</body>
+</html>
