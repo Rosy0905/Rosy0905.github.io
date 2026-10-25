@@ -134,9 +134,26 @@
      所以读写之前都必须先探一下库在不在，不在就一个字节都不写。 */
   function idbExists(dbName) {
     if (indexedDB.databases) {
-      return indexedDB.databases().then(function (list) {
-        return list.some(function (d) { return d.name === dbName; });
-      }, function () { return probeByUpgrade(dbName); });
+      return new Promise(function (res) {
+        var spent = false;
+        var done = function (v) { if (spent) return; spent = true; clearTimeout(t); res(v); };
+        /* databases() 迟迟不回来的话改用探库兜底，别把整轮统计吊死 */
+        var t = setTimeout(function () {
+          if (spent) return;
+          probeByUpgrade(dbName).then(done, function () { done(false); });
+        }, 600);
+        try {
+          indexedDB.databases().then(function (list) {
+            done(list.some(function (d) { return d.name === dbName; }));
+          }, function () {
+            if (spent) return;
+            probeByUpgrade(dbName).then(done, function () { done(false); });
+          });
+        } catch (e) {
+          if (spent) return;
+          probeByUpgrade(dbName).then(done, function () { done(false); });
+        }
+      });
     }
     return probeByUpgrade(dbName);
   }
@@ -144,16 +161,21 @@
      升级事务被中止，库就创建不出来，效果等同「只探不建」 */
   function probeByUpgrade(dbName) {
     return new Promise(function (res) {
-      var r = indexedDB.open(dbName);
+      var spent = false;
+      var done = function (v) { if (spent) return; spent = true; clearTimeout(t); res(v); };
+      /* 探不动就当不存在：宁可不数，也绝不因为超时去开库（开库会造空壳） */
+      var t = setTimeout(function () { done(false); }, 800);
+      var r;
+      try { r = indexedDB.open(dbName); } catch (e) { done(false); return; }
       r.onupgradeneeded = function () {
         try { r.transaction.abort(); } catch (e) {}
       };
       r.onsuccess = function () {
         try { r.result.close(); } catch (e) {}
-        res(true);
+        done(true);
       };
-      r.onerror = function () { res(false); };
-      r.onblocked = function () { res(true); };
+      r.onerror = function () { done(false); };
+      r.onblocked = function () { done(true); };
     });
   }
 
@@ -166,13 +188,18 @@
   }
   function dumpStores(dbName, onlyStores) {
     return new Promise(function (res) {
+      var spent = false;
+      var finish = function (v) { if (spent) return; spent = true; clearTimeout(guard); res(v); };
+      /* 库被别的标签页占着、升级卡住时 open 会一直不回调，这里也要有死线 */
+      var guard = setTimeout(function () { finish({ __missing: true }); }, 1000);
       var openReq = indexedDB.open(dbName);
       /* 理论上探过一遍库一定在，这里再兜一层：万一读的瞬间库被别处删了，
          也绝不建空壳，直接报 missing */
       openReq.onupgradeneeded = function () {
         try { openReq.transaction.abort(); } catch (e) {}
       };
-      openReq.onerror = function () { res({ __missing: true }); };
+      openReq.onerror = function () { finish({ __missing: true }); };
+      openReq.onblocked = function () { finish({ __missing: true }); };
       openReq.onsuccess = function () {
         var db = openReq.result;
         var out = {};
@@ -181,22 +208,16 @@
         if (onlyStores && onlyStores.length) {
           names = names.filter(function (n) { return onlyStores.indexOf(n) >= 0; });
         }
-        if (!names.length) { db.close(); res(out); return; }
+        if (!names.length) { try { db.close(); } catch (e) {} finish(out); return; }
         var left = names.length;
         names.forEach(function (store) {
+          var settle = function () { if (--left === 0) { try { db.close(); } catch (e) {} finish(out); } };
           try {
             var rq = db.transaction(store, 'readonly').objectStore(store).getAll();
-            rq.onsuccess = function () {
-              out[store] = rq.result || [];
-              if (--left === 0) { db.close(); res(out); }
-            };
-            rq.onerror = function () {
-              out[store] = [];
-              if (--left === 0) { db.close(); res(out); }
-            };
+            rq.onsuccess = function () { out[store] = rq.result || []; settle(); };
+            rq.onerror = function () { out[store] = []; settle(); };
           } catch (e) {
-            out[store] = [];
-            if (--left === 0) { db.close(); res(out); }
+            out[store] = []; settle();
           }
         });
       };
@@ -462,19 +483,47 @@
      超过 3 秒的缓存也当过期，打开前现数一次，保证不拿旧数据骗人。 */
   var statsFull = {};
   var statsAt = 0;
+  /* 单站统计绝不无限等：某个库被别的标签页占着、浏览器迟迟不给回调，
+     到点就用手上的缓存（没有就给空值）交差，不让整轮统计跟着卡死 */
+  var STATS_WAIT = 1200;
+  function statsSafe(s) {
+    return new Promise(function (res) {
+      var spent = false;
+      var t = setTimeout(function () {
+        if (spent) return; spent = true;
+        var old = statsFull[s.id];
+        res(old ? { cnt: old.cnt, bytes: old.bytes, __stale: true } : { cnt: 0, bytes: 0, __fail: true });
+      }, STATS_WAIT);
+      var done = function (st) {
+        if (spent) return; spent = true;
+        clearTimeout(t);
+        res(st || (statsFull[s.id] ? statsFull[s.id] : { cnt: 0, bytes: 0, __fail: true }));
+      };
+      try { siteStats(s).then(done, function () { done(null); }); }
+      catch (e) { done(null); }
+    });
+  }
   function refreshAllStats() {
     return Promise.all(SITES.map(function (s) {
-      return siteStats(s).then(function (st) { statsFull[s.id] = st; });
-    })).then(function () { statsAt = Date.now(); });
+      return statsSafe(s).then(function (st) {
+        /* 真读到的（哪怕读出来是 0 条）才进缓存，超时兜底的占位不覆盖真值 */
+        if (st && !st.__fail) statsFull[s.id] = { cnt: st.cnt, bytes: st.bytes };
+      });
+    })).then(function () { statsAt = Date.now(); }, function () { statsAt = Date.now(); });
   }
   function statsOf(id) { return statsFull[id] || { cnt: 0, bytes: 0 }; }
   function statsFresh() { return Date.now() - statsAt < 3000; }
   /* 打开弹窗的统一入口：缓存新鲜就同步渲染，否则现数再开，两种走法
-     弹窗都是一次性完整出现，没有中间态 */
+     弹窗都是一次性完整出现，没有中间态。此外还有一道死线：球已经收起去了，
+     要是一直等不到统计，面板就永远不出现——所以无论如何到点都把面板放出来。 */
+  var PANEL_DEADLINE = 1400;
   function withStats(show) {
     var ready = SITES.every(function (s) { return statsFull[s.id]; });
     if (ready && statsFresh()) { show(); return; }
-    refreshAllStats().then(show);
+    var fired = false;
+    var fire = function () { if (fired) return; fired = true; show(); };
+    refreshAllStats().then(fire, fire);
+    setTimeout(fire, PANEL_DEADLINE);
   }
   refreshAllStats();
   document.addEventListener('visibilitychange', function () {
@@ -485,20 +534,24 @@
   function openExportDialog() {
     closeDockInstant();
     withStats(function () {
-      var list = $('syncSiteList');
-      list.innerHTML = '';
-      SITES.forEach(function (s) {
-        var st = statsOf(s.id);
-        var row = document.createElement('label');
-        row.className = 'sync-site' + (st.cnt ? ' chk' : ' is-empty');
-        row.innerHTML =
-          '<input type="checkbox" data-site="' + s.id + '"' + (st.cnt ? ' checked' : ' disabled') + '>' +
-          '<span class="sync-tick"></span>' +
-          '<span class="sync-site-txt"><b>' + s.name + '</b>' +
-          '<i>' + (st.cnt ? st.cnt + ' 条记录 · ' + fmtSize(st.bytes) : '本机暂无数据') + '</i></span>';
-        list.appendChild(row);
-      });
-      refreshExportSize();
+      /* 渲染万一出错也要把面板放出来：球已经收起来了，
+         面板不出来就变成"点了没反应"，只能刷新页面才能恢复 */
+      try {
+        var list = $('syncSiteList');
+        list.innerHTML = '';
+        SITES.forEach(function (s) {
+          var st = statsOf(s.id);
+          var row = document.createElement('label');
+          row.className = 'sync-site' + (st.cnt ? ' chk' : ' is-empty');
+          row.innerHTML =
+            '<input type="checkbox" data-site="' + s.id + '"' + (st.cnt ? ' checked' : ' disabled') + '>' +
+            '<span class="sync-tick"></span>' +
+            '<span class="sync-site-txt"><b>' + s.name + '</b>' +
+            '<i>' + (st.cnt ? st.cnt + ' 条记录 · ' + fmtSize(st.bytes) : '本机暂无数据') + '</i></span>';
+          list.appendChild(row);
+        });
+        refreshExportSize();
+      } catch (e) {}
       exportOverlay.classList.add('show');
     });
   }
@@ -773,31 +826,33 @@
   function openClearDialog() {
     closeDockInstant();
     withStats(function () {
-      var list = $('syncClearList');
-      list.innerHTML = '';
-      clearRows = SITES.map(function (s) {
-        var st = statsOf(s.id);
-        return { s: s, cnt: st.cnt, bytes: st.bytes };
-      });
-      var any = false;
-      clearRows.forEach(function (r) {
-        if (!r.cnt) return;
-        any = true;
-        var row = document.createElement('label');
-        row.className = 'sync-site';
-        row.innerHTML =
-          '<input type="checkbox" data-site="' + r.s.id + '">' +
-          '<span class="sync-tick"></span>' +
-          '<span class="sync-site-txt"><b>' + r.s.name + '</b>' +
-          '<i>' + r.cnt + ' 条记录 · ' + fmtSize(r.bytes) + '</i></span>';
-        list.appendChild(row);
-      });
-      if (!any) {
-        list.innerHTML = '<p style="margin-top:4px;font-size:12px;color:#8A92B4">' +
-          '本机四个站都没有数据，没什么可清除的。</p>';
-      }
-      $('syncClearOk').disabled = !any;
-      refreshClearSize();
+      try {
+        var list = $('syncClearList');
+        list.innerHTML = '';
+        clearRows = SITES.map(function (s) {
+          var st = statsOf(s.id);
+          return { s: s, cnt: st.cnt, bytes: st.bytes };
+        });
+        var any = false;
+        clearRows.forEach(function (r) {
+          if (!r.cnt) return;
+          any = true;
+          var row = document.createElement('label');
+          row.className = 'sync-site';
+          row.innerHTML =
+            '<input type="checkbox" data-site="' + r.s.id + '">' +
+            '<span class="sync-tick"></span>' +
+            '<span class="sync-site-txt"><b>' + r.s.name + '</b>' +
+            '<i>' + r.cnt + ' 条记录 · ' + fmtSize(r.bytes) + '</i></span>';
+          list.appendChild(row);
+        });
+        if (!any) {
+          list.innerHTML = '<p style="margin-top:4px;font-size:12px;color:#8A92B4">' +
+            '本机四个站都没有数据，没什么可清除的。</p>';
+        }
+        $('syncClearOk').disabled = !any;
+        refreshClearSize();
+      } catch (e) {}
       clearOverlay.classList.add('show');
     });
   }
