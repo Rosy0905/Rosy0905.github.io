@@ -140,18 +140,18 @@
         /* databases() 迟迟不回来的话改用探库兜底，别把整轮统计吊死 */
         var t = setTimeout(function () {
           if (spent) return;
-          probeByUpgrade(dbName).then(done, function () { done(false); });
-        }, 600);
+          probeByUpgrade(dbName).then(done, function () { done(null); });
+        }, 2500);
         try {
           indexedDB.databases().then(function (list) {
             done(list.some(function (d) { return d.name === dbName; }));
           }, function () {
             if (spent) return;
-            probeByUpgrade(dbName).then(done, function () { done(false); });
+            probeByUpgrade(dbName).then(done, function () { done(null); });
           });
         } catch (e) {
           if (spent) return;
-          probeByUpgrade(dbName).then(done, function () { done(false); });
+          probeByUpgrade(dbName).then(done, function () { done(null); });
         }
       });
     }
@@ -163,8 +163,9 @@
     return new Promise(function (res) {
       var spent = false;
       var done = function (v) { if (spent) return; spent = true; clearTimeout(t); res(v); };
-      /* 探不动就当不存在：宁可不数，也绝不因为超时去开库（开库会造空壳） */
-      var t = setTimeout(function () { done(false); }, 800);
+      /* 探不动就返回 null（不知道），绝不能当"不存在"：
+         当不存在会影响显示（把有数据说成没数据），这个判断只用于读，不写 */
+      var t = setTimeout(function () { done(null); }, 2500);
       var r;
       try { r = indexedDB.open(dbName); } catch (e) { done(false); return; }
       r.onupgradeneeded = function () {
@@ -182,7 +183,8 @@
   /* ---------- IndexedDB 读取：整库全量（onlyStores 给了就只读这些表） ---------- */
   function idbDump(dbName, onlyStores) {
     return idbExists(dbName).then(function (ok) {
-      if (!ok) return { __missing: true };
+      /* 只有确定不存在才报 missing；探不动(null)还是得试着读一次 */
+      if (ok === false) return { __missing: true };
       return dumpStores(dbName, onlyStores);
     });
   }
@@ -190,19 +192,22 @@
     return new Promise(function (res) {
       var spent = false;
       var finish = function (v) { if (spent) return; spent = true; clearTimeout(guard); res(v); };
-      /* 库被别的标签页占着、升级卡住时 open 会一直不回调，这里也要有死线 */
-      var guard = setTimeout(function () { finish({ __missing: true }); }, 1000);
+      /* 库被别的标签页占着、升级卡住时 open 会一直不回调，这里也要有死线。
+         死线只是防死锁，判据是「读不出来」而不是「没数据」——两者不能混。
+         1MB 多的笔记库在慢设备上冷读要上百毫秒，给足 5 秒。 */
+      var guard = setTimeout(function () { finish({ __timeout: true }); }, 5000);
       var openReq = indexedDB.open(dbName);
       /* 理论上探过一遍库一定在，这里再兜一层：万一读的瞬间库被别处删了，
          也绝不建空壳，直接报 missing */
       openReq.onupgradeneeded = function () {
         try { openReq.transaction.abort(); } catch (e) {}
       };
-      openReq.onerror = function () { finish({ __missing: true }); };
-      openReq.onblocked = function () { finish({ __missing: true }); };
+      openReq.onerror = function () { finish({ __unread: true }); };
+      openReq.onblocked = function () { finish({ __unread: true }); };
       openReq.onsuccess = function () {
         var db = openReq.result;
         var out = {};
+        var bad = false;
         var names = Array.prototype.slice.call(db.objectStoreNames);
         /* 有 dataStores 的站只读数据表：题库是随站内容，备份只带学习数据 */
         if (onlyStores && onlyStores.length) {
@@ -211,13 +216,19 @@
         if (!names.length) { try { db.close(); } catch (e) {} finish(out); return; }
         var left = names.length;
         names.forEach(function (store) {
-          var settle = function () { if (--left === 0) { try { db.close(); } catch (e) {} finish(out); } };
+          /* 某张表读挂了这个库就算没读全，不能把空数组当成「真的空」报上去 */
+          var settle = function () {
+            if (--left === 0) {
+              try { db.close(); } catch (e) {}
+              finish(bad ? { __unread: true } : out);
+            }
+          };
           try {
             var rq = db.transaction(store, 'readonly').objectStore(store).getAll();
             rq.onsuccess = function () { out[store] = rq.result || []; settle(); };
-            rq.onerror = function () { out[store] = []; settle(); };
+            rq.onerror = function () { bad = true; settle(); };
           } catch (e) {
-            out[store] = []; settle();
+            bad = true; settle();
           }
         });
       };
@@ -282,8 +293,13 @@
     var want = Object.keys(data).filter(function (k) {
       return Array.isArray(data[k]) && data[k].length;
     });
+    /* 这个库备份里一条都没有：不读也不写，尤其不能开库，
+       开了就会凭空多出一个空库（阅读站那个旧库就是这么来的） */
+    if (!want.length) return Promise.resolve(0);
     return idbExists(dbName).then(function (ok) {
-      if (!ok) return openForWrite(dbName, want, null);
+      /* false 确定不存在；null 是探不动（不知道）——两种都按「带着表去开」，
+         库不存在会顺手建好表，库在就继续往下查缺不缺表 */
+      if (ok === false) return openForWrite(dbName, want, null);
       return openForWrite(dbName, [], null).then(function (db) {
         var missing = want.filter(function (s) { return !db.objectStoreNames.contains(s); });
         if (!missing.length) return db;
@@ -447,11 +463,11 @@
   window.addEventListener('resize', function () { if (isOpen) layoutOrbs(); });
 
   var toastTimer = null;
-  function showToast(msg) {
+  function showToast(msg, ms) {
     toastEl.textContent = msg;
     toastEl.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 2600);
+    toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, ms || 2600);
   }
 
   /* ================================================================
@@ -467,13 +483,18 @@
     if (!s.dbs.length) return Promise.resolve({ cnt: cnt, bytes: bytes });
     return Promise.all(s.dbs.map(function (d) { return idbDump(d, s.dataStores); }))
       .then(function (dumps) {
+        var unread = false;
         dumps.forEach(function (data) {
-          if (!data || data.__missing) return;
+          if (!data) { unread = true; return; }
+          if (data.__missing) return;
+          /* 读不出来 ≠ 没有数据：这个标记要一路带到界面上，
+             否则她看到的就是「16 条变 3 条」这种假数字 */
+          if (data.__unread) { unread = true; return; }
           Object.keys(data).forEach(function (st) {
             if (Array.isArray(data[st])) { cnt += data[st].length; bytes += utf8Len(JSON.stringify(data[st])); }
           });
         });
-        return { cnt: cnt, bytes: bytes };
+        return { cnt: cnt, bytes: bytes, partial: unread };
       });
   }
 
@@ -485,19 +506,20 @@
   var statsAt = 0;
   /* 单站统计绝不无限等：某个库被别的标签页占着、浏览器迟迟不给回调，
      到点就用手上的缓存（没有就给空值）交差，不让整轮统计跟着卡死 */
-  var STATS_WAIT = 1200;
+  var STATS_WAIT = 6000;
   function statsSafe(s) {
     return new Promise(function (res) {
       var spent = false;
       var t = setTimeout(function () {
         if (spent) return; spent = true;
         var old = statsFull[s.id];
-        res(old ? { cnt: old.cnt, bytes: old.bytes, __stale: true } : { cnt: 0, bytes: 0, __fail: true });
+        res(old ? { cnt: old.cnt, bytes: old.bytes, partial: old.partial, __stale: true }
+                : { cnt: 0, bytes: 0, partial: true, __fail: true });
       }, STATS_WAIT);
       var done = function (st) {
         if (spent) return; spent = true;
         clearTimeout(t);
-        res(st || (statsFull[s.id] ? statsFull[s.id] : { cnt: 0, bytes: 0, __fail: true }));
+        res(st || (statsFull[s.id] ? statsFull[s.id] : { cnt: 0, bytes: 0, partial: true, __fail: true }));
       };
       try { siteStats(s).then(done, function () { done(null); }); }
       catch (e) { done(null); }
@@ -506,12 +528,24 @@
   function refreshAllStats() {
     return Promise.all(SITES.map(function (s) {
       return statsSafe(s).then(function (st) {
-        /* 真读到的（哪怕读出来是 0 条）才进缓存，超时兜底的占位不覆盖真值 */
-        if (st && !st.__fail) statsFull[s.id] = { cnt: st.cnt, bytes: st.bytes };
+        /* 真读到的（哪怕读出来是 0 条）才覆盖缓存；
+           读失败的也留个「这站没读全」的记号，绝不写成一个干净的 0 条 */
+        if (st && !st.__fail) statsFull[s.id] = { cnt: st.cnt, bytes: st.bytes, partial: !!st.partial };
+        else if (!statsFull[s.id]) statsFull[s.id] = { cnt: 0, bytes: 0, partial: true };
       });
     })).then(function () { statsAt = Date.now(); }, function () { statsAt = Date.now(); });
   }
-  function statsOf(id) { return statsFull[id] || { cnt: 0, bytes: 0 }; }
+  function statsOf(id) { return statsFull[id] || { cnt: 0, bytes: 0, partial: true }; }
+  /* 统计行文案：没读全就说没读全。以前读失败会掉到「本机暂无数据」或只报
+     localStorage 那几个键的条数，看着像数据丢了，实际是没读出来 */
+  function statLine(st) {
+    if (st.partial) {
+      return st.cnt
+        ? st.cnt + ' 条（笔记库没读全，关掉重开这个面板再试）'
+        : '笔记库暂时读不出来，关掉重开再试';
+    }
+    return st.cnt ? st.cnt + ' 条记录 · ' + fmtSize(st.bytes) : '本机暂无数据';
+  }
   function statsFresh() { return Date.now() - statsAt < 3000; }
   /* 打开弹窗的统一入口：缓存新鲜就同步渲染，否则现数再开，两种走法
      弹窗都是一次性完整出现，没有中间态。此外还有一道死线：球已经收起去了，
@@ -547,7 +581,7 @@
             '<input type="checkbox" data-site="' + s.id + '"' + (st.cnt ? ' checked' : ' disabled') + '>' +
             '<span class="sync-tick"></span>' +
             '<span class="sync-site-txt"><b>' + s.name + '</b>' +
-            '<i>' + (st.cnt ? st.cnt + ' 条记录 · ' + fmtSize(st.bytes) : '本机暂无数据') + '</i></span>';
+            '<i>' + statLine(st) + '</i></span>';
           list.appendChild(row);
         });
         refreshExportSize();
@@ -751,11 +785,22 @@
           }));
         });
       });
-      Promise.all(idbJobs).then(function () {
-        if (errs.length) showToast('导入完成，但 ' + errs.join('、') + ' 有数据没写进去');
-        else showToast('导入成功！' + done + ' 条记录已恢复，刷新各站即可看到');
+      /* 导入结果必须有回话，而且不能等死。
+         以前是 Promise.all 直接 .then——只要有一个写库动作回调不来
+         （手机上大记录写入卡住、库被别的标签页占着），toast 就永远不出现，
+         她那边看到的就是「导完没反应、再看还是 3 条」。 */
+      var reported = false;
+      var report = function (timedOut) {
+        if (reported) return;
+        reported = true;
+        var list = errs.slice();
+        if (timedOut) list.push('还有数据在写，可能没写完');
+        if (list.length) showToast('导入没全成功：' + list.join('、') + '。刷新各站看看条数对不对', 9000);
+        else showToast('导入成功！' + done + ' 条记录已恢复，刷新各站即可看到', 6000);
         refreshAllStats();
-      });
+      };
+      Promise.all(idbJobs).then(function () { report(false); }, function () { report(false); });
+      setTimeout(function () { report(true); }, 20000);
     };
     importOverlay.classList.add('show');
   }
@@ -831,11 +876,12 @@
         list.innerHTML = '';
         clearRows = SITES.map(function (s) {
           var st = statsOf(s.id);
-          return { s: s, cnt: st.cnt, bytes: st.bytes };
+          return { s: s, cnt: st.cnt, bytes: st.bytes, partial: st.partial };
         });
         var any = false;
         clearRows.forEach(function (r) {
-          if (!r.cnt) return;
+          /* 没读全的站也要列出来，不能因为条数读成 0 就当成没数据藏起来 */
+          if (!r.cnt && !r.partial) return;
           any = true;
           var row = document.createElement('label');
           row.className = 'sync-site';
@@ -843,7 +889,7 @@
             '<input type="checkbox" data-site="' + r.s.id + '">' +
             '<span class="sync-tick"></span>' +
             '<span class="sync-site-txt"><b>' + r.s.name + '</b>' +
-            '<i>' + r.cnt + ' 条记录 · ' + fmtSize(r.bytes) + '</i></span>';
+            '<i>' + statLine(r) + '</i></span>';
           list.appendChild(row);
         });
         if (!any) {
