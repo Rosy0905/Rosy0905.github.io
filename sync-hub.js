@@ -94,10 +94,53 @@
   function pad2(n) { return String(n).padStart(2, '0'); }
   function $(id) { return document.getElementById(id); }
 
+  /* ---------- 探库：库到底存不存在 ----------
+     【2026-10-25 修复】以前读数据直接 indexedDB.open(dbName) 不带版本号，
+     库不存在时浏览器会「顺手」创建一个空壳（version 1、一张表都没有）。
+     之后导入再打开这个空壳，onupgradeneeded 不触发，所有 store 都建不出来，
+     数据被那句「建不出来的 store 跳过」静默吞掉——手机上 13 条笔记全丢、
+     弹窗却还报「导入成功」，就是它干的。
+     所以读写之前都必须先探一下库在不在，不在就一个字节都不写。 */
+  function idbExists(dbName) {
+    if (indexedDB.databases) {
+      return indexedDB.databases().then(function (list) {
+        return list.some(function (d) { return d.name === dbName; });
+      }, function () { return probeByUpgrade(dbName); });
+    }
+    return probeByUpgrade(dbName);
+  }
+  /* 老浏览器没有 databases() 时的兜底：一进 onupgradeneeded 就 abort，
+     升级事务被中止，库就创建不出来，效果等同「只探不建」 */
+  function probeByUpgrade(dbName) {
+    return new Promise(function (res) {
+      var r = indexedDB.open(dbName);
+      r.onupgradeneeded = function () {
+        try { r.transaction.abort(); } catch (e) {}
+      };
+      r.onsuccess = function () {
+        try { r.result.close(); } catch (e) {}
+        res(true);
+      };
+      r.onerror = function () { res(false); };
+      r.onblocked = function () { res(true); };
+    });
+  }
+
   /* ---------- IndexedDB 读取：整库全量（onlyStores 给了就只读这些表） ---------- */
   function idbDump(dbName, onlyStores) {
+    return idbExists(dbName).then(function (ok) {
+      if (!ok) return { __missing: true };
+      return dumpStores(dbName, onlyStores);
+    });
+  }
+  function dumpStores(dbName, onlyStores) {
     return new Promise(function (res) {
       var openReq = indexedDB.open(dbName);
+      /* 理论上探过一遍库一定在，这里再兜一层：万一读的瞬间库被别处删了，
+         也绝不建空壳，直接报 missing */
+      openReq.onupgradeneeded = function () {
+        try { openReq.transaction.abort(); } catch (e) {}
+      };
       openReq.onerror = function () { res({ __missing: true }); };
       openReq.onsuccess = function () {
         var db = openReq.result;
@@ -130,46 +173,85 @@
   }
 
   /* ---------- IndexedDB 写入：按记录 put 覆盖 ---------- */
-  function idbRestore(dbName, data) {
+  /* 打开库并把缺的表补出来。
+     ver 给了就按该版本升级建表；没给就按自然版本打开（库不存在时浏览器从 0 升 1，
+     onupgradeneeded 照样触发，表能建出来）。 */
+  function openForWrite(dbName, storeNames, ver) {
     return new Promise(function (res, rej) {
-      var openReq = indexedDB.open(dbName);
-      openReq.onerror = function () { rej(openReq.error || new Error('打不开数据库 ' + dbName)); };
-      openReq.onupgradeneeded = function (ev) {
-        /* 本机没这个库时，按备份里的结构建 */
-        var db = ev.target.result;
-        Object.keys(data).forEach(function (s) {
+      var openReq = ver ? indexedDB.open(dbName, ver) : indexedDB.open(dbName);
+      openReq.onupgradeneeded = function () {
+        var db = openReq.result;
+        storeNames.forEach(function (s) {
           if (!db.objectStoreNames.contains(s)) {
             try { db.createObjectStore(s, { keyPath: 'id' }); } catch (e) {}
           }
         });
       };
-      openReq.onsuccess = function () {
-        var db = openReq.result;
-        var names = Array.prototype.slice.call(db.objectStoreNames);
-        var jobs = [];
-        Object.keys(data).forEach(function (store) {
-          var rows = data[store];
-          if (!Array.isArray(rows) || !rows.length) return;
-          if (names.indexOf(store) < 0) return; /* 建不出来的 store 跳过，不阻断其他 */
-          jobs.push(new Promise(function (ok, no) {
-            var tx = db.transaction(store, 'readwrite');
-            tx.oncomplete = ok;
-            tx.onerror = function () { no(tx.error); };
-            tx.onabort = function () { no(tx.error || new Error('写入被中止')); };
-            try {
-              var st = tx.objectStore(store);
-              rows.forEach(function (r) { try { st.put(r); } catch (e) {} });
-            } catch (e) { try { tx.abort(); } catch (_) {} no(e); }
-          }));
-        });
-        Promise.all(jobs.map(function (p) {
-          return p.then(function () { return null; }, function (e) { return e; });
-        })).then(function (errs) {
-          db.close();
-          var bad = errs.filter(Boolean);
-          if (bad.length) rej(bad[0]); else res();
-        });
-      };
+      openReq.onsuccess = function () { res(openReq.result); };
+      openReq.onerror = function () { rej(openReq.error || new Error('打不开数据库 ' + dbName)); };
+      /* 别处还开着旧版本连接时升级会被卡住，如实报错，不装死 */
+      openReq.onblocked = function () { rej(new Error('数据库被其他标签页占用，关掉其他页面再试')); };
+    });
+  }
+
+  /* 往已打开的表里整批 put，返回缺表清单 */
+  function writeStores(db, data) {
+    var names = Array.prototype.slice.call(db.objectStoreNames);
+    var jobs = [];
+    var skipped = [];
+    Object.keys(data).forEach(function (store) {
+      var rows = data[store];
+      if (!Array.isArray(rows)) return;
+      if (names.indexOf(store) < 0) { if (rows.length) skipped.push(store); return; }
+      if (!rows.length) return;
+      jobs.push(new Promise(function (ok, no) {
+        var tx = db.transaction(store, 'readwrite');
+        tx.oncomplete = ok;
+        tx.onerror = function () { no(tx.error); };
+        tx.onabort = function () { no(tx.error || new Error('写入被中止')); };
+        try {
+          var st = tx.objectStore(store);
+          rows.forEach(function (r) { try { st.put(r); } catch (e) {} });
+        } catch (e) { try { tx.abort(); } catch (_) {} no(e); }
+      }));
+    });
+    return Promise.all(jobs.map(function (p) {
+      return p.then(function () { return null; }, function (e) { return e; });
+    })).then(function (errs) {
+      var bad = errs.filter(Boolean);
+      if (bad.length) throw bad[0];
+      /* 补不齐的表必须报出来，否则又变成静默丢数据 */
+      if (skipped.length) throw new Error('缺少数据表 ' + skipped.join('、'));
+    });
+  }
+
+  function idbRestore(dbName, data) {
+    /* 备份里真有数据的表才算「需要」 */
+    var want = Object.keys(data).filter(function (k) {
+      return Array.isArray(data[k]) && data[k].length;
+    });
+    return idbExists(dbName).then(function (ok) {
+      if (!ok) return openForWrite(dbName, want, null);
+      return openForWrite(dbName, [], null).then(function (db) {
+        var missing = want.filter(function (s) { return !db.objectStoreNames.contains(s); });
+        if (!missing.length) return db;
+        /* 库在但缺表（统计体检造出来的空壳就是这种）→ 升一版把表补齐再写 */
+        var nextVer = db.version + 1;
+        try { db.close(); } catch (e) {}
+        return openForWrite(dbName, missing, nextVer);
+      });
+    }).then(function (db) {
+      var total = 0;
+      Object.keys(data).forEach(function (st) {
+        if (Array.isArray(data[st])) total += data[st].length;
+      });
+      return writeStores(db, data).then(function () {
+        try { db.close(); } catch (e) {}
+        return total; /* 报告真写进去的条数，不再由调用方乐观估算 */
+      }, function (e) {
+        try { db.close(); } catch (_) {}
+        throw e;
+      });
     });
   }
 
@@ -530,9 +612,10 @@
     $('syncImportOk').onclick = async function () {
       closeImportDialog();
       var done = 0, errs = [];
-      for (var i = 0; i < found.length; i++) {
-        var s = found[i].site, pack = found[i].pack;
-        /* localStorage */
+      var idbJobs = [];
+      found.forEach(function (it) {
+        var s = it.site, pack = it.pack;
+        /* localStorage：同步写，写完就能算数 */
         var ls = pack.localStorage || {};
         Object.keys(ls).forEach(function (k) {
           if (typeof ls[k] !== 'string') return;
@@ -556,25 +639,27 @@
             done++;
           } catch (e) { errs.push(s.short); }
         });
-        /* IndexedDB */
+        /* IndexedDB：异步，全部收进 idbJobs。
+           【2026-10-25 修复】以前固定 setTimeout 600ms 就报「导入成功」，
+           那会儿大记录可能还没落盘，手机上看到成功就切走，数据就没了。
+           现在等每一条真写完（或真失败）才报，失败会把原因说出来。 */
         var dbs = pack.indexedDB || {};
         Object.keys(dbs).forEach(function (dbName) {
           var data = dbs[dbName];
           if (!data || data.__missing) return;
-          idbRestore(dbName, data).then(function () {
-            Object.keys(data).forEach(function (st) {
-              if (Array.isArray(data[st])) done += data[st].length;
-            });
+          idbJobs.push(idbRestore(dbName, data).then(function (n) {
+            done += n;
           }, function (e) {
-            errs.push(s.short + '（' + dbName + '）');
-          });
+            var why = (e && e.message) ? e.message : '写入失败';
+            errs.push(s.short + '（' + dbName + '：' + why + '）');
+          }));
         });
-      }
-      setTimeout(function () {
+      });
+      Promise.all(idbJobs).then(function () {
         if (errs.length) showToast('导入完成，但 ' + errs.join('、') + ' 有数据没写进去');
         else showToast('导入成功！' + done + ' 条记录已恢复，刷新各站即可看到');
         refreshAllStats();
-      }, 600);
+      });
     };
     importOverlay.classList.add('show');
   }
@@ -589,27 +674,34 @@
      ================================================================ */
   /* 清空指定库里的指定表（题库保留，只清数据表） */
   function clearStores(dbName, stores) {
-    return new Promise(function (res) {
-      var openReq;
-      try { openReq = indexedDB.open(dbName); } catch (e) { res(); return; }
-      openReq.onerror = function () { res(); };
-      openReq.onblocked = function () { res(); };
-      openReq.onsuccess = function () {
-        var db = openReq.result;
-        var jobs = [];
-        stores.forEach(function (st) {
-          if (!db.objectStoreNames.contains(st)) return;
-          jobs.push(new Promise(function (ok) {
-            try {
-              var tx = db.transaction(st, 'readwrite');
-              tx.objectStore(st).clear();
-              tx.oncomplete = ok; tx.onerror = ok; tx.onabort = ok;
-            } catch (e) { ok(); }
-          }));
-        });
-        Promise.all(jobs).then(function () { try { db.close(); } catch (e) {} res(); },
-          function () { try { db.close(); } catch (e) {} res(); });
-      };
+    /* 同上：库不存在就直接收工，绝不顺手造空壳 */
+    return idbExists(dbName).then(function (ok) {
+      if (!ok) return;
+      return new Promise(function (res) {
+        var openReq;
+        try { openReq = indexedDB.open(dbName); } catch (e) { res(); return; }
+        openReq.onupgradeneeded = function () {
+          try { openReq.transaction.abort(); } catch (e) {}
+        };
+        openReq.onerror = function () { res(); };
+        openReq.onblocked = function () { res(); };
+        openReq.onsuccess = function () {
+          var db = openReq.result;
+          var jobs = [];
+          stores.forEach(function (st) {
+            if (!db.objectStoreNames.contains(st)) return;
+            jobs.push(new Promise(function (ok) {
+              try {
+                var tx = db.transaction(st, 'readwrite');
+                tx.objectStore(st).clear();
+                tx.oncomplete = ok; tx.onerror = ok; tx.onabort = ok;
+              } catch (e) { ok(); }
+            }));
+          });
+          Promise.all(jobs).then(function () { try { db.close(); } catch (e) {} res(); },
+            function () { try { db.close(); } catch (e) {} res(); });
+        };
+      });
     });
   }
 
