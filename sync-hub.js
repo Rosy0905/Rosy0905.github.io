@@ -195,7 +195,14 @@
       /* 库被别的标签页占着、升级卡住时 open 会一直不回调，这里也要有死线。
          死线只是防死锁，判据是「读不出来」而不是「没数据」——两者不能混。
          1MB 多的笔记库在慢设备上冷读要上百毫秒，给足 5 秒。 */
-      var guard = setTimeout(function () { finish({ __timeout: true }); }, 5000);
+      /* 超时不只是「放弃等待」：连接要是已经打开了就得关掉。
+         留着一个没关的库连接，会把别处对这个库的删除/升级永久堵住，
+         表现就是「清除假成功、导入卡死」。 */
+      var opened = null;
+      var guard = setTimeout(function () {
+        if (opened) { try { opened.close(); } catch (e) {} }
+        finish({ __timeout: true });
+      }, 5000);
       var openReq = indexedDB.open(dbName);
       /* 理论上探过一遍库一定在，这里再兜一层：万一读的瞬间库被别处删了，
          也绝不建空壳，直接报 missing */
@@ -206,6 +213,7 @@
       openReq.onblocked = function () { finish({ __unread: true }); };
       openReq.onsuccess = function () {
         var db = openReq.result;
+        opened = db;
         var out = {};
         var bad = false;
         var names = Array.prototype.slice.call(db.objectStoreNames);
@@ -241,6 +249,14 @@
      onupgradeneeded 照样触发，表能建出来）。 */
   function openForWrite(dbName, storeNames, ver) {
     return new Promise(function (res, rej) {
+      var spent = false;
+      var fin = function (fn, v) { if (spent) return; spent = true; clearTimeout(t); fn(v); };
+      /* 别的页面占着这个库时，升级请求会一直排队、浏览器也可能不回调。
+         不能干等——等到外层 20 秒兜底才说话，她看到的就是「导入没写完」，
+         而且完全不知道该干什么。8 秒没动静就照实说被占用。 */
+      var t = setTimeout(function () {
+        fin(rej, new Error('打不开 ' + dbName + '：有别的页面占着这个库'));
+      }, 8000);
       var openReq = ver ? indexedDB.open(dbName, ver) : indexedDB.open(dbName);
       openReq.onupgradeneeded = function () {
         var db = openReq.result;
@@ -250,10 +266,10 @@
           }
         });
       };
-      openReq.onsuccess = function () { res(openReq.result); };
-      openReq.onerror = function () { rej(openReq.error || new Error('打不开数据库 ' + dbName)); };
+      openReq.onsuccess = function () { fin(res, openReq.result); };
+      openReq.onerror = function () { fin(rej, openReq.error || new Error('打不开数据库 ' + dbName)); };
       /* 别处还开着旧版本连接时升级会被卡住，如实报错，不装死 */
-      openReq.onblocked = function () { rej(new Error('数据库被其他标签页占用，关掉其他页面再试')); };
+      openReq.onblocked = function () { fin(rej, new Error('数据库被其他标签页占用，关掉其他页面再试')); };
     });
   }
 
@@ -794,9 +810,15 @@
         if (reported) return;
         reported = true;
         var list = errs.slice();
-        if (timedOut) list.push('还有数据在写，可能没写完');
-        if (list.length) showToast('导入没全成功：' + list.join('、') + '。刷新各站看看条数对不对', 9000);
-        else showToast('导入成功！' + done + ' 条记录已恢复，刷新各站即可看到', 6000);
+        if (timedOut) list.push('还有数据没写完');
+        /* 出问题必须给一句「怎么办」，光说没写完她只能干瞪眼。
+           绝大多数情况就是别的站页面还占着库，关掉再导一次就好 */
+        if (list.length) {
+          showToast('导入没全成功：' + list.join('、') +
+            '。先把其它站的页面都关掉，只留这一页，再导入一次', 10000);
+        } else {
+          showToast('导入成功！' + done + ' 条记录已恢复，刷新各站即可看到', 6000);
+        }
         refreshAllStats();
       };
       Promise.all(idbJobs).then(function () { report(false); }, function () { report(false); });
@@ -846,6 +868,48 @@
     });
   }
 
+  /* 清空一个库里的所有表（表结构留着）。
+     为什么不再用 deleteDatabase 整库删：
+     别的页面（手机上常见的阅读站标签页、桌面图标那个独立窗口）只要还开着这个库，
+     删除请求就会被 blocked 挂在浏览器队列里不动；而它后面的所有 open 都得排队，
+     导入于是永远打不开库——她那边看到的就是「说已清除、其实没清」，
+     紧接着导入等二十秒冒一句「可能没写完」。
+     清表用的是同版本 open，不升级、不会被 blocked，稳得多，效果一样是 0 条。 */
+  function clearAllStores(dbName) {
+    /* 库不存在就直接收工，绝不顺手造空壳 */
+    return idbExists(dbName).then(function (ok) {
+      if (!ok) return 0;
+      return new Promise(function (res) {
+        var spent = false;
+        var fin = function (n) { if (spent) return; spent = true; clearTimeout(t); res(n || 0); };
+        var t = setTimeout(function () { fin(0); }, 6000);
+        var openReq;
+        try { openReq = indexedDB.open(dbName); } catch (e) { return fin(0); }
+        openReq.onupgradeneeded = function () {
+          try { openReq.transaction.abort(); } catch (e) {}
+        };
+        openReq.onerror = function () { fin(0); };
+        openReq.onblocked = function () { fin(0); };
+        openReq.onsuccess = function () {
+          var db = openReq.result;
+          var names = Array.prototype.slice.call(db.objectStoreNames);
+          if (!names.length) { try { db.close(); } catch (e) {} return fin(0); }
+          var left = names.length;
+          names.forEach(function (st) {
+            var settle = function () {
+              if (--left === 0) { try { db.close(); } catch (e) {} fin(names.length); }
+            };
+            try {
+              var tx = db.transaction(st, 'readwrite');
+              tx.objectStore(st).clear();
+              tx.oncomplete = settle; tx.onerror = settle; tx.onabort = settle;
+            } catch (e) { settle(); }
+          });
+        };
+      });
+    });
+  }
+
   function clearSiteData(s) {
     /* localStorage 按前缀删（排除名单里的跳过） */
     var keys = [];
@@ -857,11 +921,11 @@
       }
     } catch (e) {}
     keys.forEach(function (k) { try { localStorage.removeItem(k); } catch (e) {} });
-    /* IndexedDB：有 dataStores 的站只清数据表（题库是内容，保留），否则整库删 */
+    /* IndexedDB：有 dataStores 的站只清数据表（题库是内容，保留），
+       其余清空全部表——都不删库，理由见 clearAllStores 上面那段 */
     var jobs = (s.dbs || []).map(function (db) {
       if (s.dataStores && s.dataStores.length) return clearStores(db, s.dataStores);
-      try { indexedDB.deleteDatabase(db); } catch (e) {}
-      return Promise.resolve();
+      return clearAllStores(db);
     });
     return Promise.all(jobs).then(function () { return keys.length; });
   }
