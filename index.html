@@ -98,6 +98,8 @@
   .grid{
     display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
     gap:clamp(16px,1.7vw,22px);
+    /* 上下两排间距比左右略宽一点点，矮窗口下底部更透气 */
+    row-gap:clamp(19px,2vw,25px);
   }
   a.card{
     display:flex;align-items:center;gap:clamp(18px,1.9vw,24px);
@@ -178,6 +180,11 @@
 
   @media (max-width:900px){
     .grid{grid-template-columns:1fr}
+    /* 竖排时按 经济学、数三、阅读、单词 排，双列电脑屏顺序不变 */
+    .c-econ{order:1}
+    .c-math{order:2}
+    .c-read{order:3}
+    .c-word{order:4}
   }
   @media (max-width:760px){
     body{padding:40px 16px 44px}
@@ -195,12 +202,16 @@
     .desc{font-size:11.5px;margin-top:5px}
     .go{flex-basis:28px;width:28px;height:28px;font-size:12px}
   }
+  /* 矮窗口适配交给 sync-hub.js 的 fitDesktop：优先砍页脚下方留白，
+     页脚位置和原版拉到最上时几乎一致，高屏完全不动 */
   @media (prefers-reduced-motion:reduce){*{transition:none !important}}
 
   /* ================= 数据同步 · 花心处的淡淡小球 ================= */
   .sync-dock{
     position:fixed; right:55px; top:75px; z-index:40;
     width:40px; height:40px;
+    --orb-dist:54px;
+    transition:top .25s ease;
   }
   .sync-orb-btn{
     position:relative; z-index:3;
@@ -244,13 +255,16 @@
     letter-spacing:.2px; line-height:1;
   }
   .sync-dock.open .sync-orb{ opacity:.92; pointer-events:auto; }
-  .sync-dock.open .sync-orb.import{ transform:translateY(-54px) scale(1); }
-  .sync-dock.open .sync-orb.export{ transform:translateY(54px) scale(1); transition-delay:.06s; }
+  .sync-dock.open .sync-orb.import{ transform:translateY(calc(-1 * var(--orb-dist))) scale(1); }
+  .sync-dock.open .sync-orb.export{ transform:translateY(var(--orb-dist)) scale(1); transition-delay:.06s; }
+  .sync-dock.open .sync-orb.clear{ transform:translateX(calc(-1 * var(--orb-dist))) scale(1); transition-delay:.03s; }
   .sync-dock.open .sync-orb:hover{ opacity:1; }
-  .sync-dock.open .sync-orb.import:hover{ transform:translateY(-54px) scale(1.09); }
-  .sync-dock.open .sync-orb.export:hover{ transform:translateY(54px) scale(1.09); }
+  .sync-dock.open .sync-orb.import:hover{ transform:translateY(calc(-1 * var(--orb-dist))) scale(1.09); }
+  .sync-dock.open .sync-orb.export:hover{ transform:translateY(var(--orb-dist)) scale(1.09); }
+  .sync-dock.open .sync-orb.clear:hover{ transform:translateX(calc(-1 * var(--orb-dist))) scale(1.09); }
   .sync-orb.import{ --oc:#E8A8C8; --ocd:#A85A7A; --osoft:#FCEEF4; }
   .sync-orb.export{ --oc:#B89EE0; --ocd:#6A4A9A; --osoft:#F0EAF8; }
+  .sync-orb.clear{ --oc:#EE7A55; --ocd:#A34A1D; --osoft:#FCEAE0; }
 
   /* ---------- 同步弹层 ---------- */
   .sync-overlay{
@@ -283,6 +297,9 @@
     transition:border-color .18s ease, background .18s ease;
   }
   .sync-site:hover{ border-color:#C9D2F0; }
+  /* 勾选后整行淡色底（蓝系，与导出弹窗匹配）；chk 是给老浏览器的兜底 class */
+  .sync-site.chk,
+  .sync-site:has(input:checked){ background:#EDF1FB; border-color:#B9C6EC; }
   .sync-site.is-empty{ opacity:.55; cursor:default; }
   .sync-site input{ display:none; }
   .sync-tick{
@@ -340,15 +357,39 @@
   }
   .sync-toast.show{ opacity:1; transform:translate(-50%,0); }
 
+  /* ---------- 清除弹窗（橙红警示） ---------- */
+  .sync-overlay--clear{ background:rgba(154,64,24,.4); }
+  .sync-overlay--clear .sync-box-ttl{ color:#A34A1D; }
+  .sync-overlay--clear .sync-site:hover{ border-color:#EDAF8E; }
+  /* 勾选后整行淡色底（橙红系，与清除弹窗匹配） */
+  .sync-overlay--clear .sync-site.chk,
+  .sync-overlay--clear .sync-site:has(input:checked){ background:#FCE9DB; border-color:#EDAF8E; }
+  .sync-overlay--clear .sync-site input:checked + .sync-tick{
+    background:#DE5C26; border-color:#DE5C26;
+  }
+  .sync-overlay--clear .sync-box-desc b{ color:#A34A1D; }
+  .sync-overlay--clear .sync-btn-ok{
+    background:linear-gradient(180deg,#F08A54,#D65F23);
+    color:#fff;
+  }
+  .sync-overlay--clear .sync-btn-ok:hover{ filter:brightness(1.05); }
+  .sync-btn-ok:disabled{ opacity:.5; cursor:not-allowed; }
+
+  /* ---------- 开弹窗时 dock 瞬收，不然三个小球在模糊背景后面
+       嗖地飞回主球，眼睛先被它们带走，像闪了一下别的东西 ---------- */
+  .sync-dock.no-anim .sync-orb{ transition:none !important; }
+
   @media (max-width:760px){
-    .sync-dock{ right:32px; top:42px; width:36px; height:36px; }
+    .sync-dock{ right:32px; top:42px; width:36px; height:36px; --orb-dist:46px; }
     .sync-orb-btn{ width:36px; height:36px; }
     .sync-orb-btn svg{ width:16px; height:16px; }
     .sync-orb{ width:32px; height:32px; margin-left:-16px; margin-top:-16px; }
-    .sync-dock.open .sync-orb.import{ transform:translateY(-48px) scale(1); }
-    .sync-dock.open .sync-orb.export{ transform:translateY(48px) scale(1); }
-    .sync-dock.open .sync-orb.import:hover{ transform:translateY(-48px) scale(1.08); }
-    .sync-dock.open .sync-orb.export:hover{ transform:translateY(48px) scale(1.08); }
+    .sync-dock.open .sync-orb.import{ transform:translateY(calc(-1 * var(--orb-dist))) scale(1); }
+    .sync-dock.open .sync-orb.export{ transform:translateY(var(--orb-dist)) scale(1); transition-delay:.06s; }
+    .sync-dock.open .sync-orb.clear{ transform:translateX(calc(-1 * var(--orb-dist))) scale(1); transition-delay:.03s; }
+    .sync-dock.open .sync-orb.import:hover{ transform:translateY(calc(-1 * var(--orb-dist))) scale(1.08); }
+    .sync-dock.open .sync-orb.export:hover{ transform:translateY(var(--orb-dist)) scale(1.08); }
+    .sync-dock.open .sync-orb.clear:hover{ transform:translateX(calc(-1 * var(--orb-dist))) scale(1.08); }
   }
 </style>
 </head>
@@ -442,7 +483,7 @@
         </svg>
       </span>
       <span class="txt">
-        <span class="name">数学三 · 错题本</span>
+        <span class="name">数学三 · 精选错题</span>
         <span class="desc">原书题目与答案，错一道记一道</span>
       </span>
       <span class="go"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12h14"/><path d="M12.5 5.5 19 12l-6.5 6.5"/></svg></span>
@@ -487,6 +528,10 @@
     <span class="orb-ic">📤</span>
     <span class="orb-tx">导出</span>
   </div>
+  <div class="sync-orb clear" id="syncOrbClear" title="清除数据（选择要清空的站点）" role="button" tabindex="0">
+    <span class="orb-ic">🧹</span>
+    <span class="orb-tx">清除</span>
+  </div>
   <button class="sync-orb-btn" type="button" id="syncOrbBtn" aria-expanded="false" aria-label="数据同步">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.8s-7.7-4.7-9.5-9.4C1 7.3 3.3 3.6 6.8 3.6c2.1 0 3.9 1.2 4.5 2.9h1.4c.6-1.7 2.4-2.9 4.5-2.9 3.5 0 5.8 3.7 4.3 7.8-1.8 4.7-9.5 9.4-9.5 9.4z"/></svg>
   </button>
@@ -516,6 +561,19 @@
     <div class="sync-btns">
       <button class="sync-btn-f sync-btn-cancel" type="button" id="syncImportCancel">取消</button>
       <button class="sync-btn-f sync-btn-ok" type="button" id="syncImportOk">导入</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 清除确认弹层（橙色） ============ -->
+<div class="sync-overlay sync-overlay--clear" id="syncClearOverlay">
+  <div class="sync-box" role="dialog" aria-label="清除数据">
+    <p class="sync-box-ttl">🧹 清除数据</p>
+    <p class="sync-box-desc">勾选要清空的站点。<b>清除后不可恢复</b>，建议先导出备份。对应站点的学习记录会被删掉，AI 配置里的 API Key 也会一起清掉。</p>
+    <div class="sync-sites" id="syncClearList"></div>
+    <div class="sync-btns">
+      <button class="sync-btn-f sync-btn-cancel" type="button" id="syncClearCancel">取消</button>
+      <button class="sync-btn-f sync-btn-ok" type="button" id="syncClearOk">清除</button>
     </div>
   </div>
 </div>
