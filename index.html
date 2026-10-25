@@ -158,7 +158,9 @@
 
   /* ---------- 页脚 ---------- */
   footer{
-    margin-top:clamp(64px,11vh,120px);
+    /* 脚本执行前的占位值，故意贴近 balanceFooter 算出的平衡位（约 视口高/3 - 190px）：
+       冷加载时浏览器可能先画一帧再等脚本，占位值准了这帧就不会跳 */
+    margin-top:clamp(16px,calc(33.3vh - 190px),170px);
     text-align:center;
   }
   footer .motto{
@@ -188,6 +190,8 @@
   }
   @media (max-width:760px){
     body{padding:40px 16px 44px}
+    /* 手机竖屏内容更高，占位值按 -205px 贴合（约 视口高/3 - 205px） */
+    footer{margin-top:clamp(16px,calc(33.3vh - 205px),120px)}
     .bloom{width:340px;height:340px;right:-120px;top:-110px;opacity:.075}
     header{margin-bottom:30px}
     .badge{width:78px;height:78px;border-radius:24px;margin-bottom:20px}
@@ -202,8 +206,9 @@
     .desc{font-size:11.5px;margin-top:5px}
     .go{flex-basis:28px;width:28px;height:28px;font-size:12px}
   }
-  /* 矮窗口适配交给 sync-hub.js 的 fitDesktop：优先砍页脚下方留白，
-     页脚位置和原版拉到最上时几乎一致，高屏完全不动 */
+  /* 矮窗口适配交给页尾内联版面脚本的 fitDesktop：优先砍页脚下方留白，
+     页脚位置和原版拉到最上时几乎一致，高屏完全不动。
+     页脚与卡片/底边的两处间距由 balanceFooter 动态拉平，同样在内联脚本里 */
   @media (prefers-reduced-motion:reduce){*{transition:none !important}}
 
   /* ================= 数据同步 · 花心处的淡淡小球 ================= */
@@ -369,18 +374,23 @@
   }
   .sync-overlay--clear .sync-box-desc b{ color:#A34A1D; }
   .sync-overlay--clear .sync-btn-ok{
-    background:linear-gradient(180deg,#F08A54,#D65F23);
+    background:#D9622B;
     color:#fff;
   }
   .sync-overlay--clear .sync-btn-ok:hover{ filter:brightness(1.05); }
   .sync-btn-ok:disabled{ opacity:.5; cursor:not-allowed; }
+  /* 清除弹窗的总量行，和导出弹窗的"预计文件大小"对称 */
+  .sync-overlay--clear .sync-size{ color:#A34A1D; }
   /* 二次确认弹层：叠在清除弹层上面，盒子收窄一档，一眼看出是最后一道闸 */
   .sync-overlay--confirm{ z-index:210; }
-  .sync-box--confirm{ max-width:340px; }
+  .sync-box--confirm{ max-width:380px; }
 
   /* ---------- 开弹窗时 dock 瞬收，不然三个小球在模糊背景后面
        嗖地飞回主球，眼睛先被它们带走，像闪了一下别的东西 ---------- */
-  .sync-dock.no-anim .sync-orb{ transition:none !important; }
+  /* 瞬收：整个 dock 连同内部所有过渡一起杀。只杀小球不够——
+     dock 自己的 top 位移（小窗口 layoutOrbs 下移后收起时要滑回去）
+     和主球的透明度过渡都会在弹窗半透明背景后面露出来，就是那一下"跳" */
+  .sync-dock.no-anim, .sync-dock.no-anim *{ transition:none !important; }
 
   @media (max-width:760px){
     .sync-dock{ right:32px; top:42px; width:36px; height:36px; --orb-dist:46px; }
@@ -574,6 +584,7 @@
     <p class="sync-box-ttl">🧹 清除数据</p>
     <p class="sync-box-desc">勾选要清空的站点。<b>清除后不可恢复</b>，建议先导出备份。对应站点的学习记录会被删掉，AI 配置里的 API Key 也会一起清掉。</p>
     <div class="sync-sites" id="syncClearList"></div>
+    <p class="sync-size" id="syncClearSize"></p>
     <div class="sync-btns">
       <button class="sync-btn-f sync-btn-cancel" type="button" id="syncClearCancel">取消</button>
       <button class="sync-btn-f sync-btn-ok" type="button" id="syncClearOk">清除</button>
@@ -596,6 +607,136 @@
 
 <div class="sync-toast" id="syncToast" role="status"></div>
 
+<!-- ============ 版面自适应（内联：必须在首画之前跑完） ============ -->
+<script>
+/* 矮窗口消滚动条 + 页脚两处间距拉平。
+   刻意做成内联脚本而不是外链：外链脚本可能晚于首画到达（缓存 revalidate 也要
+   几十毫秒），浏览器会先把没校准的版面画一帧，脚本落地后再校准，版面就跳一下。
+   内联脚本在解析期同步执行，保证首画就是终画。 */
+(function () {
+    /* ================================================================
+       矮窗口自适应（仅桌面）：100% 缩放下消掉垂直滚动条
+       砍的顺序：页脚下方留白（完全不动页脚位置）→ 页脚上方空隙 →
+       头部间距 → 古文行距 → 卡片行距 → 卡片内距。高屏一像素都不碰。
+       ================================================================ */
+    var fitTimer = null;
+    function all(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
+    function resetFit() {
+      var b = document.body;
+      b.style.paddingTop = ''; b.style.paddingBottom = '';
+      /* 注意：footer 的 marginTop 不在这里清——它归 balanceFooter 管，
+         每次布局反解一次。fitDesktop 的页脚杠杆只在溢出时从当前值往下砍 */
+      var hd = document.querySelector('header');
+      if (hd) hd.style.marginBottom = '';
+      var bd = document.querySelector('.badge');
+      if (bd) bd.style.marginBottom = '';
+      var ld = document.querySelector('.lead');
+      if (ld) { ld.style.marginTop = ''; ld.style.lineHeight = ''; }
+      var gd = document.querySelector('.grid');
+      if (gd) gd.style.rowGap = '';
+      /* 卡片和描述必须整组清，只清第一张会留下残差，
+         表现为放大网页再缩小后，下面两排卡片和上面两排不一样 */
+      all('a.card').forEach(function (c) { c.style.paddingTop = ''; c.style.paddingBottom = ''; });
+      all('.desc').forEach(function (d) { d.style.marginTop = ''; });
+      var mt = document.querySelector('footer .motto');
+      if (mt) mt.style.lineHeight = '';
+      var h1 = document.querySelector('h1');
+      if (h1) h1.style.fontSize = '';
+    }
+    function fitDesktop() {
+      if (!window.matchMedia('(min-width:761px)').matches) { resetFit(); return; }
+      resetFit();
+      var de = document.documentElement;
+      var b = document.body;
+      var ft = document.querySelector('footer');
+      var hd = document.querySelector('header');
+      var bd = document.querySelector('.badge');
+      var ld = document.querySelector('.lead');
+      var gd = document.querySelector('.grid');
+      var cd = document.querySelector('a.card');
+      var ds = document.querySelector('.desc');
+      var mt = document.querySelector('footer .motto');
+      var h1 = document.querySelector('h1');
+      function over() { return de.scrollHeight - de.clientHeight; }
+      function num(el, prop) { return el ? (parseFloat(getComputedStyle(el)[prop]) || 0) : 0; }
+      /* div = 这个杠杆每砍 1px 实际省几 px 行高（多行/多卡/双边距）。
+         地板值按实测定：1084x640 实测就要砍（底部内距压到 4px 地板、头上间距 13px），
+         再高一点的窗口才可能一档不触发。 */
+      var levers = [
+        { get: function () { return num(b, 'paddingBottom'); }, set: function (v) { b.style.paddingBottom = v + 'px'; }, floor: 4 },
+        { get: function () { return num(ft, 'marginTop'); }, set: function (v) { ft.style.marginTop = v + 'px'; }, floor: 28 },
+        { get: function () { return num(hd, 'marginBottom'); }, set: function (v) { hd.style.marginBottom = v + 'px'; }, floor: 13 },
+        { get: function () { return num(b, 'paddingTop'); }, set: function (v) { b.style.paddingTop = v + 'px'; }, floor: 14 },
+        { get: function () { return num(bd, 'marginBottom'); }, set: function (v) { bd.style.marginBottom = v + 'px'; }, floor: 9 },
+        { get: function () { return num(ld, 'marginTop'); }, set: function (v) { ld.style.marginTop = v + 'px'; }, floor: 7 },
+        { get: function () { return num(ld, 'lineHeight'); }, set: function (v) { ld.style.lineHeight = v + 'px'; }, floor: 21, div: 2 },
+        { get: function () { return num(gd, 'rowGap'); }, set: function (v) { gd.style.rowGap = v + 'px'; }, floor: 6 },
+        { get: function () { return num(cd, 'paddingTop'); }, set: function (v) { all('a.card').forEach(function (c) { c.style.paddingTop = v + 'px'; c.style.paddingBottom = v + 'px'; }); }, floor: 9, div: 4 },
+        { get: function () { return num(ds, 'marginTop'); }, set: function (v) { all('.desc').forEach(function (d) { d.style.marginTop = v + 'px'; }); }, floor: 2, div: 4 },
+        { get: function () { return num(h1, 'fontSize'); }, set: function (v) { h1.style.fontSize = v + 'px'; }, floor: 28 },
+        { get: function () { return num(mt, 'lineHeight'); }, set: function (v) { mt.style.lineHeight = v + 'px'; }, floor: 15 }
+      ];
+      for (var i = 0; i < levers.length; i++) {
+        if (over() <= 0) break;
+        var lv = levers[i];
+        var cur = lv.get();
+        if (!cur) continue;
+        var take = Math.min(cur - lv.floor, over() / (lv.div || 1));
+        if (take > 0.5) lv.set(cur - take);
+      }
+    }
+    /* 页脚平衡器：body 是 flex 居中列，自由空间一半在头顶一半在页脚下面，
+       所以"卡片→页脚"和"页脚→底边"两个间距的平衡点每块屏幕都不一样，
+       静态 clamp 顾了这头顾不了那头。这里按当前布局反解出唯一的 margin-top，
+       让两处间距相等；页面溢出时不插手，交给 fitDesktop 去砍。
+       推导：gap1 = m，gap2 = pb + F/2，F = V - pt - pb - base - m，
+       令 gap1 = gap2 解得 m = (V - pt + pb - base) / 3。
+       最后 +8 是小0主人定的微调：纯等分她看着觉得页脚偏上，要卡片距略大于
+       底边距（+8 等于页脚再降 8px，卡片距 +8、底边距 -4）。 */
+    function balanceFooter() {
+      var de = document.documentElement;
+      var ft = document.querySelector('footer');
+      var mn = document.querySelector('main');
+      if (!ft || !mn) return;
+      if (de.scrollHeight > de.clientHeight + 1) return;
+      var V = de.clientHeight;
+      var bs = getComputedStyle(document.body);
+      var pt = parseFloat(bs.paddingTop) || 0, pb = parseFloat(bs.paddingBottom) || 0;
+      var m0 = parseFloat(getComputedStyle(ft).marginTop) || 0;
+      var base = mn.getBoundingClientRect().height - m0;
+      var m = Math.round((V - pt + pb - base) / 3) + 8;
+      m = Math.max(16, Math.min(200, m));
+      var prev = ft.style.marginTop;
+      ft.style.marginTop = m + 'px';
+      /* 设完要是顶得页面溢出了，撤回 */
+      if (de.scrollHeight > de.clientHeight + 1) ft.style.marginTop = prev;
+    }
+    window.__hubFit = fitDesktop;
+    window.__hubBalance = balanceFooter;
+    function layoutAll() {
+      try { fitDesktop(); } catch (e) {}
+      try { balanceFooter(); } catch (e) {}
+    }
+    try { layoutAll(); } catch (e) {}
+    window.addEventListener('resize', function () {
+      clearTimeout(fitTimer);
+      fitTimer = setTimeout(layoutAll, 150);
+    });
+    /* 加载完成后只校准页脚间距，不重跑 fitDesktop。
+       fitDesktop 开头 resetFit 清掉内联砍值、再按当前溢出量重砍；解析首画那次砍的时候
+       页脚 margin 还没加进来，load 后重砍量的却是含 margin 的内容，两次砍的不是同一份
+       版面，短窗口必然砍出不同结果——整个版面会跳一下（她反馈的"刷新弹一下"）。
+       balanceFooter 是幂等的：同一份布局算出来的一模一样，load 后重算不会动版面。
+       只有加载后真的溢出了（内容比解析时变高）才整套重排。 */
+    window.addEventListener('load', function () {
+      setTimeout(function () {
+        try { balanceFooter(); } catch (e) {}
+        var de = document.documentElement;
+        if (de.scrollHeight > de.clientHeight + 1) { try { layoutAll(); } catch (e) {} }
+      }, 60);
+    });
+})();
+</script>
 <script src="sync-hub.js"></script>
 </body>
 </html>

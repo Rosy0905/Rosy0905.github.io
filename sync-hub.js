@@ -322,12 +322,11 @@
   /* 统一的站数据统计：localStorage（含排除名单）+ IndexedDB 真读。
      IDB 按 dataStores 过滤——题库是内容，不算用户的记录（数学站只数 status）。
      导出弹窗和清除弹窗共用，避免两边口径不一样把站误判成空。 */
-  var statsCache = {};
   function siteStats(s) {
     var pack = collectSite(s);
     var cnt = countOf(pack);
     var bytes = bytesOf(pack);
-    if (!s.dbs.length) { statsCache[s.id] = bytes; return Promise.resolve({ cnt: cnt, bytes: bytes }); }
+    if (!s.dbs.length) return Promise.resolve({ cnt: cnt, bytes: bytes });
     return Promise.all(s.dbs.map(function (d) { return idbDump(d, s.dataStores); }))
       .then(function (dumps) {
         dumps.forEach(function (data) {
@@ -336,32 +335,54 @@
             if (Array.isArray(data[st])) { cnt += data[st].length; bytes += utf8Len(JSON.stringify(data[st])); }
           });
         });
-        statsCache[s.id] = bytes;
         return { cnt: cnt, bytes: bytes };
       });
   }
 
+  /* 统计预缓存：进页面就后台把四站数好存着。弹窗打开时直接用缓存同步渲染，
+     不再先弹出标题和说明、勾选框等 IndexDB 读完才补上——那种两级出场
+     她自己看出不对劲了。换标签页回来 / 自己刚清完 / 刚导入完都会重数，
+     超过 3 秒的缓存也当过期，打开前现数一次，保证不拿旧数据骗人。 */
+  var statsFull = {};
+  var statsAt = 0;
+  function refreshAllStats() {
+    return Promise.all(SITES.map(function (s) {
+      return siteStats(s).then(function (st) { statsFull[s.id] = st; });
+    })).then(function () { statsAt = Date.now(); });
+  }
+  function statsOf(id) { return statsFull[id] || { cnt: 0, bytes: 0 }; }
+  function statsFresh() { return Date.now() - statsAt < 3000; }
+  /* 打开弹窗的统一入口：缓存新鲜就同步渲染，否则现数再开，两种走法
+     弹窗都是一次性完整出现，没有中间态 */
+  function withStats(show) {
+    var ready = SITES.every(function (s) { return statsFull[s.id]; });
+    if (ready && statsFresh()) { show(); return; }
+    refreshAllStats().then(show);
+  }
+  refreshAllStats();
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refreshAllStats();
+  });
+  window.addEventListener('focus', refreshAllStats);
+
   function openExportDialog() {
     closeDockInstant();
-    var list = $('syncSiteList');
-    list.innerHTML = '<p style="margin-top:4px;font-size:12px;color:#8A92B4">正在统计…</p>';
-    exportOverlay.classList.add('show');
-    Promise.all(SITES.map(function (s) {
-      return siteStats(s).then(function (st) { return { s: s, cnt: st.cnt, bytes: st.bytes }; });
-    })).then(function (rows) {
+    withStats(function () {
+      var list = $('syncSiteList');
       list.innerHTML = '';
-      rows.forEach(function (r) {
-        var s = r.s, cnt = r.cnt;
+      SITES.forEach(function (s) {
+        var st = statsOf(s.id);
         var row = document.createElement('label');
-        row.className = 'sync-site' + (cnt ? ' chk' : ' is-empty');
+        row.className = 'sync-site' + (st.cnt ? ' chk' : ' is-empty');
         row.innerHTML =
-          '<input type="checkbox" data-site="' + s.id + '"' + (cnt ? ' checked' : ' disabled') + '>' +
+          '<input type="checkbox" data-site="' + s.id + '"' + (st.cnt ? ' checked' : ' disabled') + '>' +
           '<span class="sync-tick"></span>' +
           '<span class="sync-site-txt"><b>' + s.name + '</b>' +
-          '<i>' + (cnt ? cnt + ' 条记录 · ' + fmtSize(r.bytes) : '本机暂无数据') + '</i></span>';
+          '<i>' + (st.cnt ? st.cnt + ' 条记录 · ' + fmtSize(st.bytes) : '本机暂无数据') + '</i></span>';
         list.appendChild(row);
       });
       refreshExportSize();
+      exportOverlay.classList.add('show');
     });
   }
 
@@ -375,9 +396,7 @@
   function refreshExportSize() {
     var total = 160;
     currentPick().forEach(function (id) {
-      var s = siteById(id);
-      if (!s) return;
-      total += (statsCache[id] != null ? statsCache[id] : bytesOf(collectSite(s)));
+      total += statsOf(id).bytes;
     });
     $('syncExportSize').innerHTML = '预计文件大小：<b>' + fmtSize(total) + '</b>';
   }
@@ -554,6 +573,7 @@
       setTimeout(function () {
         if (errs.length) showToast('导入完成，但 ' + errs.join('、') + ' 有数据没写进去');
         else showToast('导入成功！' + done + ' 条记录已恢复，刷新各站即可看到');
+        refreshAllStats();
       }, 600);
     };
     importOverlay.classList.add('show');
@@ -617,17 +637,15 @@
   var clearRows = [];
   function openClearDialog() {
     closeDockInstant();
-    var list = $('syncClearList');
-    list.innerHTML = '';
-    clearOverlay.classList.add('show');
-    /* 有 IndexedDB 的站异步数一下记录，保证列表不漏 */
-    var jobs = SITES.map(function (s) {
-      return siteStats(s).then(function (st) { return { s: s, cnt: st.cnt, bytes: st.bytes }; });
-    });
-    Promise.all(jobs).then(function (rows) {
-      clearRows = rows;
+    withStats(function () {
+      var list = $('syncClearList');
+      list.innerHTML = '';
+      clearRows = SITES.map(function (s) {
+        var st = statsOf(s.id);
+        return { s: s, cnt: st.cnt, bytes: st.bytes };
+      });
       var any = false;
-      rows.forEach(function (r) {
+      clearRows.forEach(function (r) {
         if (!r.cnt) return;
         any = true;
         var row = document.createElement('label');
@@ -644,7 +662,27 @@
           '本机四个站都没有数据，没什么可清除的。</p>';
       }
       $('syncClearOk').disabled = !any;
+      refreshClearSize();
+      clearOverlay.classList.add('show');
     });
+  }
+  /* 总量行：和导出弹窗的"预计文件大小"对称，勾选时实时算 */
+  function refreshClearSize() {
+    var el = $('syncClearSize');
+    if (!el) return;
+    var cnt = 0, bytes = 0, n = 0;
+    clearOverlay.querySelectorAll('input[data-site]').forEach(function (cb) {
+      if (!cb.checked) return;
+      n++;
+      for (var i = 0; i < clearRows.length; i++) {
+        if (clearRows[i].s.id === cb.getAttribute('data-site')) {
+          cnt += clearRows[i].cnt; bytes += clearRows[i].bytes; break;
+        }
+      }
+    });
+    el.innerHTML = n
+      ? '将清除 <b>' + cnt + '</b> 条记录 · 约 ' + fmtSize(bytes)
+      : '勾选站点后，这里显示将清除的总量';
   }
   function closeClearDialog() { clearOverlay.classList.remove('show'); }
   orbClear.addEventListener('click', openClearDialog);
@@ -652,11 +690,13 @@
   clearOverlay.addEventListener('click', function (e) {
     if (e.target === clearOverlay) closeClearDialog();
   });
-  /* 勾选状态同步到行的 .chk class（淡色底在老浏览器上的兜底，:has() 之外也有效） */
+  /* 勾选状态同步到行的 .chk class（淡色底在老浏览器上的兜底，:has() 之外也有效）；
+     清除弹窗里还要顺带刷新总量行 */
   [exportOverlay, clearOverlay].forEach(function (ov) {
     ov.addEventListener('change', function (e) {
       var row = e.target.closest ? e.target.closest('.sync-site') : null;
       if (row) row.classList.toggle('chk', e.target.checked);
+      if (ov === clearOverlay) refreshClearSize();
     });
   });
   /* 点「清除」不直接删，先过二次确认这道闸 */
@@ -710,87 +750,10 @@
     showToast('正在清除 ' + done.join('、') + '…');
     Promise.all(jobs).then(function () {
       showToast('已清除 ' + done.join('、') + '，刷新各站后生效');
+      refreshAllStats();
     }, function () {
       showToast('清除出错了，刷新页面再看');
     });
-  });
-
-  /* ================================================================
-     矮窗口自适应（仅桌面）：100% 缩放下消掉垂直滚动条
-     砍的顺序：页脚下方留白（完全不动页脚位置）→ 页脚上方空隙 →
-     头部间距 → 古文行距 → 卡片行距 → 卡片内距。高屏一像素都不碰。
-     ================================================================ */
-  var fitTimer = null;
-  function all(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
-  function resetFit() {
-    var b = document.body;
-    b.style.paddingTop = ''; b.style.paddingBottom = '';
-    var ft = document.querySelector('footer');
-    if (ft) ft.style.marginTop = '';
-    var hd = document.querySelector('header');
-    if (hd) hd.style.marginBottom = '';
-    var bd = document.querySelector('.badge');
-    if (bd) bd.style.marginBottom = '';
-    var ld = document.querySelector('.lead');
-    if (ld) { ld.style.marginTop = ''; ld.style.lineHeight = ''; }
-    var gd = document.querySelector('.grid');
-    if (gd) gd.style.rowGap = '';
-    /* 卡片和描述必须整组清，只清第一张会留下残差，
-       表现为放大网页再缩小后，下面两排卡片和上面两排不一样 */
-    all('a.card').forEach(function (c) { c.style.paddingTop = ''; c.style.paddingBottom = ''; });
-    all('.desc').forEach(function (d) { d.style.marginTop = ''; });
-    var mt = document.querySelector('footer .motto');
-    if (mt) mt.style.lineHeight = '';
-    var h1 = document.querySelector('h1');
-    if (h1) h1.style.fontSize = '';
-  }
-  function fitDesktop() {
-    if (!window.matchMedia('(min-width:761px)').matches) { resetFit(); return; }
-    resetFit();
-    var de = document.documentElement;
-    var b = document.body;
-    var ft = document.querySelector('footer');
-    var hd = document.querySelector('header');
-    var bd = document.querySelector('.badge');
-    var ld = document.querySelector('.lead');
-    var gd = document.querySelector('.grid');
-    var cd = document.querySelector('a.card');
-    var ds = document.querySelector('.desc');
-    var mt = document.querySelector('footer .motto');
-    var h1 = document.querySelector('h1');
-    function over() { return de.scrollHeight - de.clientHeight; }
-    function num(el, prop) { return el ? (parseFloat(getComputedStyle(el)[prop]) || 0) : 0; }
-    /* div = 这个杠杆每砍 1px 实际省几 px 行高（多行/多卡/双边距）。
-       地板值按两套标准定：她常用的 1084x640 以上自然放下，一档都不会触发；
-       下面的低地板只在极矮窗口（500px 上下）才够用，平时看不到。 */
-    var levers = [
-      { get: function () { return num(b, 'paddingBottom'); }, set: function (v) { b.style.paddingBottom = v + 'px'; }, floor: 4 },
-      { get: function () { return num(ft, 'marginTop'); }, set: function (v) { ft.style.marginTop = v + 'px'; }, floor: 28 },
-      { get: function () { return num(hd, 'marginBottom'); }, set: function (v) { hd.style.marginBottom = v + 'px'; }, floor: 13 },
-      { get: function () { return num(b, 'paddingTop'); }, set: function (v) { b.style.paddingTop = v + 'px'; }, floor: 14 },
-      { get: function () { return num(bd, 'marginBottom'); }, set: function (v) { bd.style.marginBottom = v + 'px'; }, floor: 9 },
-      { get: function () { return num(ld, 'marginTop'); }, set: function (v) { ld.style.marginTop = v + 'px'; }, floor: 7 },
-      { get: function () { return num(ld, 'lineHeight'); }, set: function (v) { ld.style.lineHeight = v + 'px'; }, floor: 21, div: 2 },
-      { get: function () { return num(gd, 'rowGap'); }, set: function (v) { gd.style.rowGap = v + 'px'; }, floor: 6 },
-      { get: function () { return num(cd, 'paddingTop'); }, set: function (v) { all('a.card').forEach(function (c) { c.style.paddingTop = v + 'px'; c.style.paddingBottom = v + 'px'; }); }, floor: 9, div: 4 },
-      { get: function () { return num(ds, 'marginTop'); }, set: function (v) { all('.desc').forEach(function (d) { d.style.marginTop = v + 'px'; }); }, floor: 2, div: 4 },
-      { get: function () { return num(h1, 'fontSize'); }, set: function (v) { h1.style.fontSize = v + 'px'; }, floor: 28 },
-      { get: function () { return num(mt, 'lineHeight'); }, set: function (v) { mt.style.lineHeight = v + 'px'; }, floor: 15 }
-    ];
-    for (var i = 0; i < levers.length; i++) {
-      if (over() <= 0) break;
-      var lv = levers[i];
-      var cur = lv.get();
-      if (!cur) continue;
-      var take = Math.min(cur - lv.floor, over() / (lv.div || 1));
-      if (take > 0.5) lv.set(cur - take);
-    }
-  }
-  window.__hubFit = fitDesktop;
-  try { fitDesktop(); } catch (e) {}
-  window.addEventListener('resize', function () {
-    clearTimeout(fitTimer);
-    fitTimer = setTimeout(function () { try { fitDesktop(); } catch (e) {} }, 150);
   });
 
 })();
