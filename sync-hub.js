@@ -32,12 +32,22 @@
     {
       id: 'math', name: '数学三 · 精选错题', short: '数学三',
       lsPrefix: ['studyMath'],
+      /* studyMathSeedVer 是题库版本号（题库重灌的判断依据），不是学习数据：
+         计数与代清都跳过，删了会触发整库重灌，多此一举 */
+      lsExclude: ['studyMathSeedVer'],
+      /* problems 表是随站发行的题库（种子灌入），status 表才是正误标记。
+         代清与站内「清空正误」对齐：只清 status，题库保留 */
+      dataStores: ['status'],
       dbs: ['study-math-v3']
     },
     {
       id: 'reading', name: '英语一 · 真题阅读', short: '英语阅读',
       /* drawn.* 是阅读站画笔工具栏的三个偏好键，不在 ekz 前缀里 */
       lsPrefix: ['ekz', 'drawn.'],
+      /* ekz-wiped-<id> 是阅读站清空后故意留的防复活记号（拦着开着的标签页把
+         内存里的旧笔迹写回来），只带一个时间戳，不是用户数据。
+         收集 / 导出 / 计数 / 主站代清都跳过它，记号只有阅读站自己能删 */
+      lsExclude: ['ekz-wiped-'],
       /* ekz-notes-db 是迁移前的旧库，阅读站自己清空时也会删它，
          不删会在下次迁移时把笔记灌回来 */
       dbs: ['ekz-notes-v2', 'ekz-notes-db']
@@ -52,6 +62,12 @@
   ];
 
   var AI_CFG_PREFIX = 'ai_assistant_cfg_';
+
+  /* 键是否属于某站：前缀命中，且不在该站的排除名单里 */
+  function lsHit(k, site) {
+    if (site.lsExclude && site.lsExclude.some(function (p) { return k.indexOf(p) === 0; })) return false;
+    return site.lsPrefix.some(function (p) { return k.indexOf(p) === 0; });
+  }
 
   function siteById(id) {
     for (var i = 0; i < SITES.length; i++) if (SITES[i].id === id) return SITES[i];
@@ -78,8 +94,8 @@
   function pad2(n) { return String(n).padStart(2, '0'); }
   function $(id) { return document.getElementById(id); }
 
-  /* ---------- IndexedDB 读取：整库全量 ---------- */
-  function idbDump(dbName) {
+  /* ---------- IndexedDB 读取：整库全量（onlyStores 给了就只读这些表） ---------- */
+  function idbDump(dbName, onlyStores) {
     return new Promise(function (res) {
       var openReq = indexedDB.open(dbName);
       openReq.onerror = function () { res({ __missing: true }); };
@@ -87,6 +103,10 @@
         var db = openReq.result;
         var out = {};
         var names = Array.prototype.slice.call(db.objectStoreNames);
+        /* 有 dataStores 的站只读数据表：题库是随站内容，备份只带学习数据 */
+        if (onlyStores && onlyStores.length) {
+          names = names.filter(function (n) { return onlyStores.indexOf(n) >= 0; });
+        }
         if (!names.length) { db.close(); res(out); return; }
         var left = names.length;
         names.forEach(function (store) {
@@ -160,7 +180,7 @@
       for (var i = 0; i < localStorage.length; i++) {
         var k = localStorage.key(i);
         if (!k) continue;
-        var hit = site.lsPrefix.some(function (p) { return k.indexOf(p) === 0; });
+        var hit = lsHit(k, site);
         if (!hit) continue;
         var v = localStorage.getItem(k);
         if (typeof v === 'string') out[k] = v;
@@ -298,24 +318,50 @@
   /* ================================================================
      导出
      ================================================================ */
+  /* 统一的站数据统计：localStorage（含排除名单）+ IndexedDB 真读。
+     IDB 按 dataStores 过滤——题库是内容，不算用户的记录（数学站只数 status）。
+     导出弹窗和清除弹窗共用，避免两边口径不一样把站误判成空。 */
+  var statsCache = {};
+  function siteStats(s) {
+    var pack = collectSite(s);
+    var cnt = countOf(pack);
+    var bytes = bytesOf(pack);
+    if (!s.dbs.length) { statsCache[s.id] = bytes; return Promise.resolve({ cnt: cnt, bytes: bytes }); }
+    return Promise.all(s.dbs.map(function (d) { return idbDump(d, s.dataStores); }))
+      .then(function (dumps) {
+        dumps.forEach(function (data) {
+          if (!data || data.__missing) return;
+          Object.keys(data).forEach(function (st) {
+            if (Array.isArray(data[st])) { cnt += data[st].length; bytes += utf8Len(JSON.stringify(data[st])); }
+          });
+        });
+        statsCache[s.id] = bytes;
+        return { cnt: cnt, bytes: bytes };
+      });
+  }
+
   function openExportDialog() {
     closeDockInstant();
     var list = $('syncSiteList');
-    list.innerHTML = '';
-    SITES.forEach(function (s, idx) {
-      var pack = collectSite(s);
-      var cnt = countOf(pack);
-      var row = document.createElement('label');
-      row.className = 'sync-site' + (cnt ? ' chk' : ' is-empty');
-      row.innerHTML =
-        '<input type="checkbox" data-site="' + s.id + '"' + (cnt ? ' checked' : ' disabled') + '>' +
-        '<span class="sync-tick"></span>' +
-        '<span class="sync-site-txt"><b>' + s.name + '</b>' +
-        '<i>' + (cnt ? cnt + ' 条记录 · ' + fmtSize(bytesOf(pack)) : '本机暂无数据') + '</i></span>';
-      list.appendChild(row);
-    });
-    refreshExportSize();
+    list.innerHTML = '<p style="margin-top:4px;font-size:12px;color:#8A92B4">正在统计…</p>';
     exportOverlay.classList.add('show');
+    Promise.all(SITES.map(function (s) {
+      return siteStats(s).then(function (st) { return { s: s, cnt: st.cnt, bytes: st.bytes }; });
+    })).then(function (rows) {
+      list.innerHTML = '';
+      rows.forEach(function (r) {
+        var s = r.s, cnt = r.cnt;
+        var row = document.createElement('label');
+        row.className = 'sync-site' + (cnt ? ' chk' : ' is-empty');
+        row.innerHTML =
+          '<input type="checkbox" data-site="' + s.id + '"' + (cnt ? ' checked' : ' disabled') + '>' +
+          '<span class="sync-tick"></span>' +
+          '<span class="sync-site-txt"><b>' + s.name + '</b>' +
+          '<i>' + (cnt ? cnt + ' 条记录 · ' + fmtSize(r.bytes) : '本机暂无数据') + '</i></span>';
+        list.appendChild(row);
+      });
+      refreshExportSize();
+    });
   }
 
   function currentPick() {
@@ -329,7 +375,8 @@
     var total = 160;
     currentPick().forEach(function (id) {
       var s = siteById(id);
-      if (s) total += bytesOf(collectSite(s));
+      if (!s) return;
+      total += (statsCache[id] != null ? statsCache[id] : bytesOf(collectSite(s)));
     });
     $('syncExportSize').innerHTML = '预计文件大小：<b>' + fmtSize(total) + '</b>';
   }
@@ -371,7 +418,7 @@
       if (s.dbs.length) {
         pack.indexedDB = {};
         for (var j = 0; j < s.dbs.length; j++) {
-          pack.indexedDB[s.dbs[j]] = await idbDump(s.dbs[j]);
+          pack.indexedDB[s.dbs[j]] = await idbDump(s.dbs[j], s.dataStores);
         }
       }
       sitesPack[s.id] = pack;
@@ -519,23 +566,50 @@
   /* ================================================================
      清除：橙色小球，勾选清除哪个站
      ================================================================ */
+  /* 清空指定库里的指定表（题库保留，只清数据表） */
+  function clearStores(dbName, stores) {
+    return new Promise(function (res) {
+      var openReq;
+      try { openReq = indexedDB.open(dbName); } catch (e) { res(); return; }
+      openReq.onerror = function () { res(); };
+      openReq.onblocked = function () { res(); };
+      openReq.onsuccess = function () {
+        var db = openReq.result;
+        var jobs = [];
+        stores.forEach(function (st) {
+          if (!db.objectStoreNames.contains(st)) return;
+          jobs.push(new Promise(function (ok) {
+            try {
+              var tx = db.transaction(st, 'readwrite');
+              tx.objectStore(st).clear();
+              tx.oncomplete = ok; tx.onerror = ok; tx.onabort = ok;
+            } catch (e) { ok(); }
+          }));
+        });
+        Promise.all(jobs).then(function () { try { db.close(); } catch (e) {} res(); },
+          function () { try { db.close(); } catch (e) {} res(); });
+      };
+    });
+  }
+
   function clearSiteData(s) {
-    /* localStorage 按前缀删 */
+    /* localStorage 按前缀删（排除名单里的跳过） */
     var keys = [];
     try {
       for (var i = 0; i < localStorage.length; i++) {
         var k = localStorage.key(i);
         if (!k) continue;
-        var hit = s.lsPrefix.some(function (p) { return k.indexOf(p) === 0; });
-        if (hit) keys.push(k);
+        if (lsHit(k, s)) keys.push(k);
       }
     } catch (e) {}
     keys.forEach(function (k) { try { localStorage.removeItem(k); } catch (e) {} });
-    /* IndexedDB 整库删 */
-    (s.dbs || []).forEach(function (db) {
+    /* IndexedDB：有 dataStores 的站只清数据表（题库是内容，保留），否则整库删 */
+    var jobs = (s.dbs || []).map(function (db) {
+      if (s.dataStores && s.dataStores.length) return clearStores(db, s.dataStores);
       try { indexedDB.deleteDatabase(db); } catch (e) {}
+      return Promise.resolve();
     });
-    return keys.length;
+    return Promise.all(jobs).then(function () { return keys.length; });
   }
 
   function openClearDialog() {
@@ -545,18 +619,7 @@
     clearOverlay.classList.add('show');
     /* 有 IndexedDB 的站异步数一下记录，保证列表不漏 */
     var jobs = SITES.map(function (s) {
-      var cnt = countOf(collectSite(s));
-      if (!s.dbs.length) return Promise.resolve({ s: s, cnt: cnt });
-      return Promise.all(s.dbs.map(function (d) { return idbDump(d); }))
-        .then(function (dumps) {
-          dumps.forEach(function (data) {
-            if (!data || data.__missing) return;
-            Object.keys(data).forEach(function (st) {
-              if (Array.isArray(data[st])) cnt += data[st].length;
-            });
-          });
-          return { s: s, cnt: cnt };
-        });
+      return siteStats(s).then(function (st) { return { s: s, cnt: st.cnt, bytes: st.bytes }; });
     });
     Promise.all(jobs).then(function (rows) {
       var any = false;
@@ -569,7 +632,7 @@
           '<input type="checkbox" data-site="' + r.s.id + '">' +
           '<span class="sync-tick"></span>' +
           '<span class="sync-site-txt"><b>' + r.s.name + '</b>' +
-          '<i>' + r.cnt + ' 条记录 · ' + fmtSize(bytesOf(collectSite(r.s))) + '</i></span>';
+          '<i>' + r.cnt + ' 条记录 · ' + fmtSize(r.bytes) + '</i></span>';
         list.appendChild(row);
       });
       if (!any) {
@@ -599,14 +662,20 @@
     });
     if (!picked.length) { showToast('先勾选要清除的站'); return; }
     var done = [];
+    var jobs = [];
     picked.forEach(function (id) {
       var s = siteById(id);
       if (!s) return;
-      clearSiteData(s);
+      jobs.push(clearSiteData(s));
       done.push(s.short);
     });
     closeClearDialog();
-    showToast('已清除 ' + done.join('、') + '，刷新各站后生效');
+    showToast('正在清除 ' + done.join('、') + '…');
+    Promise.all(jobs).then(function () {
+      showToast('已清除 ' + done.join('、') + '，刷新各站后生效');
+    }, function () {
+      showToast('清除出错了，刷新页面再看');
+    });
   });
 
   /* ================================================================
