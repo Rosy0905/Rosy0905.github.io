@@ -374,6 +374,9 @@
   }
   .sync-overlay--clear .sync-btn-ok:hover{ filter:brightness(1.05); }
   .sync-btn-ok:disabled{ opacity:.5; cursor:not-allowed; }
+  /* 二次确认弹层：叠在清除弹层上面，盒子收窄一档，一眼看出是最后一道闸 */
+  .sync-overlay--confirm{ z-index:210; }
+  .sync-box--confirm{ max-width:340px; }
 
   /* ---------- 开弹窗时 dock 瞬收，不然三个小球在模糊背景后面
        嗖地飞回主球，眼睛先被它们带走，像闪了一下别的东西 ---------- */
@@ -574,6 +577,19 @@
     <div class="sync-btns">
       <button class="sync-btn-f sync-btn-cancel" type="button" id="syncClearCancel">取消</button>
       <button class="sync-btn-f sync-btn-ok" type="button" id="syncClearOk">清除</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 清除二次确认（叠在清除弹层之上） ============ -->
+<div class="sync-overlay sync-overlay--clear sync-overlay--confirm" id="syncClearConfirmOverlay">
+  <div class="sync-box sync-box--confirm" role="dialog" aria-label="确认清除">
+    <p class="sync-box-ttl">⚠️ 确认清除</p>
+    <p class="sync-box-desc">马上就删掉下面这些站的数据，<b>删掉就找不回来了</b>。建议先取消，去导出个备份。删吗？</p>
+    <div class="sync-import-rows" id="syncClearConfirmList"></div>
+    <div class="sync-btns">
+      <button class="sync-btn-f sync-btn-cancel" type="button" id="syncClearConfirmCancel">取消</button>
+      <button class="sync-btn-f sync-btn-ok" type="button" id="syncClearConfirmOk">确认清除</button>
     </div>
   </div>
 </div>

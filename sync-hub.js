@@ -240,6 +240,7 @@
   var exportOverlay = $('syncExportOverlay');
   var importOverlay = $('syncImportOverlay');
   var clearOverlay = $('syncClearOverlay');
+  var clearConfirmOverlay = $('syncClearConfirmOverlay');
   var toastEl = $('syncToast');
 
   var isOpen = false;
@@ -612,6 +613,8 @@
     return Promise.all(jobs).then(function () { return keys.length; });
   }
 
+  /* 清除弹窗当前各站的统计，二次确认弹层照着列清单 */
+  var clearRows = [];
   function openClearDialog() {
     closeDockInstant();
     var list = $('syncClearList');
@@ -622,6 +625,7 @@
       return siteStats(s).then(function (st) { return { s: s, cnt: st.cnt, bytes: st.bytes }; });
     });
     Promise.all(jobs).then(function (rows) {
+      clearRows = rows;
       var any = false;
       rows.forEach(function (r) {
         if (!r.cnt) return;
@@ -655,12 +659,46 @@
       if (row) row.classList.toggle('chk', e.target.checked);
     });
   });
+  /* 点「清除」不直接删，先过二次确认这道闸 */
   $('syncClearOk').addEventListener('click', function () {
+    var picked = pickedSiteIds();
+    if (!picked.length) { showToast('先勾选要清除的站'); return; }
+    openClearConfirm(picked);
+  });
+  function pickedSiteIds() {
     var picked = [];
     clearOverlay.querySelectorAll('input[data-site]').forEach(function (cb) {
       if (cb.checked) picked.push(cb.getAttribute('data-site'));
     });
-    if (!picked.length) { showToast('先勾选要清除的站'); return; }
+    return picked;
+  }
+  function openClearConfirm(picked) {
+    var list = $('syncClearConfirmList');
+    list.innerHTML = '';
+    picked.forEach(function (id) {
+      var row = null;
+      for (var i = 0; i < clearRows.length; i++) {
+        if (clearRows[i].s.id === id) { row = clearRows[i]; break; }
+      }
+      if (!row) return;
+      var el = document.createElement('div');
+      el.className = 'sync-import-row';
+      el.innerHTML = '<b>' + row.s.name + '</b><i>' + row.cnt + ' 条记录</i>';
+      list.appendChild(el);
+    });
+    clearConfirmOverlay.classList.add('show');
+  }
+  function closeClearConfirm() { clearConfirmOverlay.classList.remove('show'); }
+  $('syncClearConfirmCancel').addEventListener('click', closeClearConfirm);
+  clearConfirmOverlay.addEventListener('click', function (e) {
+    if (e.target === clearConfirmOverlay) closeClearConfirm();
+  });
+  /* 确认清除：这里才真删 */
+  $('syncClearConfirmOk').addEventListener('click', function () {
+    var picked = pickedSiteIds();
+    if (!picked.length) { closeClearConfirm(); return; }
+    closeClearConfirm();
+    closeClearDialog();
     var done = [];
     var jobs = [];
     picked.forEach(function (id) {
@@ -669,7 +707,6 @@
       jobs.push(clearSiteData(s));
       done.push(s.short);
     });
-    closeClearDialog();
     showToast('正在清除 ' + done.join('、') + '…');
     Promise.all(jobs).then(function () {
       showToast('已清除 ' + done.join('、') + '，刷新各站后生效');
