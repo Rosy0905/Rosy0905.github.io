@@ -255,7 +255,7 @@
          不能干等——等到外层 20 秒兜底才说话，她看到的就是「导入没写完」，
          而且完全不知道该干什么。8 秒没动静就照实说被占用。 */
       var t = setTimeout(function () {
-        fin(rej, new Error('打不开 ' + dbName + '：有别的页面占着这个库'));
+        fin(rej, new Error('被别的页面占着，打不开'));
       }, 8000);
       var openReq = ver ? indexedDB.open(dbName, ver) : indexedDB.open(dbName);
       openReq.onupgradeneeded = function () {
@@ -269,7 +269,7 @@
       openReq.onsuccess = function () { fin(res, openReq.result); };
       openReq.onerror = function () { fin(rej, openReq.error || new Error('打不开数据库 ' + dbName)); };
       /* 别处还开着旧版本连接时升级会被卡住，如实报错，不装死 */
-      openReq.onblocked = function () { fin(rej, new Error('数据库被其他标签页占用，关掉其他页面再试')); };
+      openReq.onblocked = function () { fin(rej, new Error('被其他标签页占用，关掉其他页面再试')); };
     });
   }
 
@@ -483,6 +483,9 @@
     toastEl.textContent = msg;
     toastEl.classList.add('show');
     clearTimeout(toastTimer);
+    /* ms 传 0 表示常驻，不自己消失，等下一句把它换掉。
+       导入过程要用它：慢的时候提示不能先溜走，不然又变回干等 */
+    if (ms === 0) return;
     toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, ms || 2600);
   }
 
@@ -503,9 +506,10 @@
         dumps.forEach(function (data) {
           if (!data) { unread = true; return; }
           if (data.__missing) return;
-          /* 读不出来 ≠ 没有数据：这个标记要一路带到界面上，
-             否则她看到的就是「16 条变 3 条」这种假数字 */
-          if (data.__unread) { unread = true; return; }
+          /* 读不出来 ≠ 没有数据：__unread / __timeout 两个标记都要一路带到界面上，
+             否则她看到的就是「16 条变 3 条」这种假数字。
+             （__timeout 以前漏判了，超时的库被当成空表，3 条就是只数了 localStorage） */
+          if (data.__unread || data.__timeout) { unread = true; return; }
           Object.keys(data).forEach(function (st) {
             if (Array.isArray(data[st])) { cnt += data[st].length; bytes += utf8Len(JSON.stringify(data[st])); }
           });
@@ -552,13 +556,13 @@
     })).then(function () { statsAt = Date.now(); }, function () { statsAt = Date.now(); });
   }
   function statsOf(id) { return statsFull[id] || { cnt: 0, bytes: 0, partial: true }; }
-  /* 统计行文案：没读全就说没读全。以前读失败会掉到「本机暂无数据」或只报
-     localStorage 那几个键的条数，看着像数据丢了，实际是没读出来 */
+  /* 统计行文案：没读全就说没读全，而且要把「下一步做什么」写出来。
+     只报症状（没读全）不报动作，她看着只能干着急。 */
   function statLine(st) {
     if (st.partial) {
       return st.cnt
-        ? st.cnt + ' 条（笔记库没读全，关掉重开这个面板再试）'
-        : '笔记库暂时读不出来，关掉重开再试';
+        ? st.cnt + ' 条（笔记库没读全，重开这个窗口再试）'
+        : '笔记库暂时读不出来，关掉其它站页面后刷新再试';
     }
     return st.cnt ? st.cnt + ' 条记录 · ' + fmtSize(st.bytes) : '本机暂无数据';
   }
@@ -647,6 +651,7 @@
 
     var sitesPack = {};
     var totalCount = 0;
+    var incomplete = [];
     for (var i = 0; i < ids.length; i++) {
       var s = siteById(ids[i]);
       var pack = collectSite(s, 'export');
@@ -658,7 +663,15 @@
       if (s.dbs.length) {
         pack.indexedDB = {};
         for (var j = 0; j < s.dbs.length; j++) {
-          pack.indexedDB[s.dbs[j]] = await idbDump(s.dbs[j], s.dataStores);
+          var dump = await idbDump(s.dbs[j], s.dataStores);
+          /* 读不出来就别把空壳写进备份文件，存 null 让导入端跳过；
+             同时记下来，最后必须告诉她这份备份缺了东西 */
+          if (!dump || dump.__timeout || dump.__unread) {
+            incomplete.push(s.short);
+            pack.indexedDB[s.dbs[j]] = null;
+          } else {
+            pack.indexedDB[s.dbs[j]] = dump;
+          }
         }
       }
       sitesPack[s.id] = pack;
@@ -689,7 +702,13 @@
     setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) {} }, 2000);
 
     closeExportDialog();
-    showToast('导出成功！' + totalCount + ' 条记录已保存');
+    if (incomplete.length) {
+      /* 残缺备份比没有备份更危险：她可能拿它去换设备，回来发现笔记全空 */
+      showToast('注意，这份备份不完整：' + incomplete.join('、') +
+        '的笔记库没读出来。别拿它换设备，先关掉其它站页面重新导一次', 12000);
+    } else {
+      showToast('导出成功！' + totalCount + ' 条记录已保存');
+    }
   });
 
   /* ================================================================
@@ -759,6 +778,21 @@
       closeImportDialog();
       var done = 0, errs = [];
       var idbJobs = [];
+      var reported = false;
+      /* 快的时候别抢戏：写入不到半秒就完成的话，直接出「导入成功」，
+         不先闪一句「正在导入」再立刻被换掉——两句挨得太近看着像在打架。
+         慢下来（手机上常见一到四秒）这行才有意义，它是「我还活着」的信号 */
+      var tProg = setTimeout(function () {
+        if (!reported) showToast('正在导入…', 0);
+      }, 500);
+      var tSlow = setTimeout(function () {
+        if (!reported) showToast('还在导入，笔记库比较大…', 0);
+      }, 3000);
+      /* 8 秒还没写完，基本就是别的页面占着库（openForWrite 自己的死线也是 8 秒），
+         这时候顺着提示说下一步，不让她等到二十秒才知道怎么回事 */
+      var tStuck = setTimeout(function () {
+        if (!reported) showToast('还没导入完，可能被其它站的页面占着，关掉它们再试', 0);
+      }, 8000);
       found.forEach(function (it) {
         var s = it.site, pack = it.pack;
         /* localStorage：同步写，写完就能算数 */
@@ -804,11 +838,14 @@
       /* 导入结果必须有回话，而且不能等死。
          以前是 Promise.all 直接 .then——只要有一个写库动作回调不来
          （手机上大记录写入卡住、库被别的标签页占着），toast 就永远不出现，
-         她那边看到的就是「导完没反应、再看还是 3 条」。 */
-      var reported = false;
+         她那边看到的就是「导完没反应、再看还是 3 条」。
+         现在中途有进度提示，这里负责把进度换成最终结果。 */
       var report = function (timedOut) {
         if (reported) return;
         reported = true;
+        clearTimeout(tProg);
+        clearTimeout(tSlow);
+        clearTimeout(tStuck);
         var list = errs.slice();
         if (timedOut) list.push('还有数据没写完');
         /* 出问题必须给一句「怎么办」，光说没写完她只能干瞪眼。

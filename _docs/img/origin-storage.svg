@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 360" width="100%" style="max-width:720px;height:auto" role="img">
+<title>路径不同的本地文件写进同一个 file:// 存储</title>
+<desc>浏览器按来源分配存储。线上是协议加域名，本地是整个 file://，文件路径不参与判断。所以路径完全不同的文件写进同一份数据，而线上和本地两份互不相通。</desc>
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="#77809F" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+
+<rect x="0" y="0" width="720" height="360" rx="18" fill="#F6F8FD"/>
+
+<rect x="44" y="26" width="200" height="54" rx="10" fill="#FFFFFF" stroke="#DDE4F5" stroke-width="1"/>
+<text x="60" y="47" dominant-baseline="central" font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="500" fill="#1B2650">D 盘 · 学习主页</text>
+<text x="60" y="66" dominant-baseline="central" font-family="Consolas,Menlo,monospace" font-size="11" fill="#6B7494">index.html</text>
+
+<rect x="262" y="26" width="200" height="54" rx="10" fill="#FFFFFF" stroke="#DDE4F5" stroke-width="1"/>
+<text x="278" y="47" dominant-baseline="central" font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="500" fill="#1B2650">D 盘 · 英语阅读站</text>
+<text x="278" y="66" dominant-baseline="central" font-family="Consolas,Menlo,monospace" font-size="11" fill="#6B7494">index.html</text>
+
+<rect x="480" y="26" width="200" height="54" rx="10" fill="#FFFFFF" stroke="#DDE4F5" stroke-width="1"/>
+<text x="496" y="47" dominant-baseline="central" font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="13" font-weight="500" fill="#1B2650">C 盘 · 任意目录</text>
+<text x="496" y="66" dominant-baseline="central" font-family="Consolas,Menlo,monospace" font-size="11" fill="#6B7494">x.html</text>
+
+<path d="M144 80 V102" fill="none" stroke="#77809F" stroke-width="1" marker-end="url(#ar)"/>
+<path d="M362 80 V102" fill="none" stroke="#77809F" stroke-width="1" marker-end="url(#ar)"/>
+<path d="M580 80 V92 H390 V102" fill="none" stroke="#77809F" stroke-width="1" marker-end="url(#ar)"/>
+
+<rect x="44" y="108" width="376" height="172" rx="14" fill="#FFFAEB" stroke="#E0A800" stroke-width="1.2"/>
+<text x="64" y="136" dominant-baseline="central" font-family="Consolas,Menlo,monospace" font-size="14" font-weight="500" fill="#2A3577">file://</text>
+<text x="64" y="160" dominant-baseline="central" font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" fill="#4E5883">本地那份 · 整台电脑共用</text>
+<path d="M64 178 H400" fill="none" stroke="#EDD9A8" stroke-width="1"/>
+<text x="64" y="202" dominant-baseline="central" font-family="Consolas,Menlo,monospace" font-size="12" fill="#2A3577">键名 ekz.favs、eco_kb_、studyMath</text>
+<text x="64" y="226" dominant-baseline="central" font-family="Consolas,Menlo,monospace" font-size="12" fill="#2A3577">库名 ekz-notes-v2、study-math-v3</text>
+<text x="64" y="252" dominant-baseline="central" font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" fill="#6B7494">路径完全不同的文件，都写在这一份里</text>
+
+<path d="M438 118 V270" fill="none" stroke="#C9D2EE" stroke-width="1" stroke-dasharray="3 5"/>
+
+<rect x="456" y="108" width="220" height="172" rx="14" fill="#EEF1FB" stroke="#5C6BC0" stroke-width="1.2"/>
+<text x="476" y="136" dominant-baseline="central" font-family="Consolas,Menlo,monospace" font-size="12" font-weight="500" fill="#2A3577">rosy0905.github.io</text>
+<text x="476" y="160" dominant-baseline="central" font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" fill="#4E5883">线上那份 · 四个站共用</text>
+<path d="M476 178 H636" fill="none" stroke="#C9D2EE" stroke-width="1"/>
+<text x="476" y="202" dominant-baseline="central" font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" fill="#2A3577">同一套键名和库名</text>
+<text x="476" y="226" dominant-baseline="central" font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" fill="#4E5883">但存在另一个仓里</text>
+<text x="476" y="252" dominant-baseline="central" font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" fill="#6B7494">两边互不相通</text>
+
+<text x="44" y="310" dominant-baseline="central" font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" fill="#4E5883">浏览器只看来源，不看路径：线上是协议加域名，本地是整个 file://</text>
+<text x="44" y="334" dominant-baseline="central" font-family="'PingFang SC','Microsoft YaHei',sans-serif" font-size="12" fill="#4E5883">主站按键名对号：换个文件夹、改个名字，读写的还是同一份</text>
+</svg>
