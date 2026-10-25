@@ -50,7 +50,18 @@
       lsExclude: ['ekz-wiped-'],
       /* ekz-notes-db 是迁移前的旧库，阅读站自己清空时也会删它，
          不删会在下次迁移时把笔记灌回来 */
-      dbs: ['ekz-notes-v2', 'ekz-notes-db']
+      dbs: ['ekz-notes-v2', 'ekz-notes-db'],
+      /* 下面这些不是学习记录，是阅读站自己写的运行时状态。
+         每打开一篇文章，笔迹兜底备份（每个画布槽位一个数据键 + 一个时间戳键）、
+         备份淘汰顺序表（ekz-ink-bk-lru）、自检面板日志、迁移标记都会新写几个键，
+         复盘页还会给每篇添一个阅读位置。以前这些都算进"条数"，
+         她导完 16 条、点开一篇回来就变成 24 条，看着像数据被复制了。
+         计数和导出都跳过 lsNoRecord；lsExportSkip 是它的子集，
+         画笔偏好（drawn.*）和阅读位置（ekz.pos.*）属于设置，
+         仍然跟着备份走，换设备不用重设。 */
+      lsNoRecord: ['ekz-ink-bk-', 'ekz-ink-bkts-', 'ekz-debug-log-v2', 'ekz-migrated',
+                   'drawn.', 'ekz.pos.'],
+      lsExportSkip: ['ekz-ink-bk-', 'ekz-ink-bkts-', 'ekz-debug-log-v2', 'ekz-migrated']
     },
     {
       id: 'words', name: '英语一 · 单词速刷', short: '单词速刷',
@@ -67,6 +78,26 @@
   function lsHit(k, site) {
     if (site.lsExclude && site.lsExclude.some(function (p) { return k.indexOf(p) === 0; })) return false;
     return site.lsPrefix.some(function (p) { return k.indexOf(p) === 0; });
+  }
+
+  /* 前缀命中判断的小工具 */
+  function hitAny(k, list) {
+    if (!list || !list.length) return false;
+    for (var i = 0; i < list.length; i++) if (k.indexOf(list[i]) === 0) return true;
+    return false;
+  }
+
+  /* 算不算"学习记录"（计数口径）：连运行时状态也不算 */
+  function lsRecord(k, site) {
+    if (!lsHit(k, site)) return false;
+    return !hitAny(k, site.lsNoRecord);
+  }
+
+  /* 要不要写进备份（导出口径）：比计数宽一点，画笔偏好/阅读位置仍带上。
+     兜底备份和日志是主库的副本或垃圾，带出去只会把备份文件撑大 */
+  function lsExport(k, site) {
+    if (!lsHit(k, site)) return false;
+    return !hitAny(k, site.lsExportSkip);
   }
 
   function siteById(id) {
@@ -256,14 +287,18 @@
   }
 
   /* ---------- 收集本机数据 ---------- */
-  function collectLs(site) {
+  /* mode='count'（默认）按"学习记录"口径收集，运行时状态不进；
+     mode='export' 宽一档，画笔偏好和阅读位置会带上。
+     清除不走这里，清除按 lsHit 全删，缓存也得删干净，
+     否则清完再打开文章，笔迹兜底备份会把笔迹灌回来。 */
+  function collectLs(site, mode) {
+    var test = mode === 'export' ? lsExport : lsRecord;
     var out = {};
     try {
       for (var i = 0; i < localStorage.length; i++) {
         var k = localStorage.key(i);
         if (!k) continue;
-        var hit = lsHit(k, site);
-        if (!hit) continue;
+        if (!test(k, site)) continue;
         var v = localStorage.getItem(k);
         if (typeof v === 'string') out[k] = v;
       }
@@ -271,8 +306,8 @@
     return out;
   }
 
-  function collectSite(site) {
-    var pack = { localStorage: collectLs(site) };
+  function collectSite(site, mode) {
+    var pack = { localStorage: collectLs(site, mode) };
     if (site.dbs.length) {
       pack.indexedDB = {};
       site.dbs.forEach(function (d) { pack.indexedDB[d] = null; });
@@ -511,7 +546,7 @@
     var totalCount = 0;
     for (var i = 0; i < ids.length; i++) {
       var s = siteById(ids[i]);
-      var pack = collectSite(s);
+      var pack = collectSite(s, 'export');
       var ls = {};
       Object.keys(pack.localStorage).forEach(function (k) {
         ls[k] = stripKey(k, pack.localStorage[k]);
@@ -590,7 +625,15 @@
       var lines = [];
       var total = 0;
       found.forEach(function (it) {
-        var cnt = countOf(it.pack);
+        /* 预览按"学习记录"口径数，跟导入后主站显示的数字对齐。
+           老备份里可能夹着笔迹兜底备份、日志这类运行时状态，
+           要是照原样数，预览说 24 条、导完显示 16 条，又对不上了。
+           实际写入不受影响，文件里有的键照样落盘。 */
+        var lsOk = {};
+        Object.keys(it.pack.localStorage || {}).forEach(function (k) {
+          if (lsRecord(k, it.site)) lsOk[k] = 1;
+        });
+        var cnt = countOf({ localStorage: lsOk, indexedDB: it.pack.indexedDB });
         total += cnt;
         lines.push({ name: it.site.name, cnt: cnt });
       });
