@@ -11,7 +11,18 @@
 <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
 <link rel="mask-icon" href="icons/icon.svg" color="#5C6BC0">
-<link rel="manifest" href="manifest.webmanifest">
+<link rel="manifest" href="manifest.webmanifest" id="app-manifest">
+<script>
+(function () {
+  var ua = navigator.userAgent;
+  var isWindows = /Windows NT/i.test(ua);
+  var isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (navigator.maxTouchPoints || 0) > 1;
+  if (isWindows && !isMobile) {
+    var link = document.getElementById('app-manifest');
+    if (link) link.setAttribute('href', 'manifest-desktop.webmanifest');
+  }
+})();
+</script>
 <meta name="theme-color" content="#DDE4F7">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">

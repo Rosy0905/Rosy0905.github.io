@@ -1,0 +1,18 @@
+{
+  "name": "学习站",
+  "short_name": "学习站",
+  "description": "经济学、英语、数学，考研路上的四个站。",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "minimal-ui",
+  "orientation": "portrait-primary",
+  "background_color": "#DDE4F7",
+  "theme_color": "#DDE4F7",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
