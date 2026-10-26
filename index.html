@@ -702,7 +702,7 @@
        让两处间距相等；页面溢出时不插手，交给 fitDesktop 去砍。
        推导：gap1 = m，gap2 = pb + F/2，F = V - pt - pb - base - m，
        令 gap1 = gap2 解得 m = (V - pt + pb - base) / 3。
-       最后 +8 是小0主人定的微调：纯等分她看着觉得页脚偏上，要卡片距略大于
+       最后 +8 是微调：纯等分时页脚偏上，要卡片距略大于
        底边距（+8 等于页脚再降 8px，卡片距 +8、底边距 -4）。 */
     function balanceFooter() {
       var de = document.documentElement;
@@ -736,7 +736,7 @@
     /* 加载完成后只校准页脚间距，不重跑 fitDesktop。
        fitDesktop 开头 resetFit 清掉内联砍值、再按当前溢出量重砍；解析首画那次砍的时候
        页脚 margin 还没加进来，load 后重砍量的却是含 margin 的内容，两次砍的不是同一份
-       版面，短窗口必然砍出不同结果——整个版面会跳一下（她反馈的"刷新弹一下"）。
+       版面，短窗口必然砍出不同结果——整个版面会跳一下（短窗口刷新时最明显）。
        balanceFooter 是幂等的：同一份布局算出来的一模一样，load 后重算不会动版面。
        只有加载后真的溢出了（内容比解析时变高）才整套重排。 */
     window.addEventListener('load', function () {

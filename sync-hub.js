@@ -252,7 +252,7 @@
       var spent = false;
       var fin = function (fn, v) { if (spent) return; spent = true; clearTimeout(t); fn(v); };
       /* 别的页面占着这个库时，升级请求会一直排队、浏览器也可能不回调。
-         不能干等——等到外层 20 秒兜底才说话，她看到的就是「导入没写完」，
+         不能干等——等到外层 20 秒兜底才说话，界面上就会显示「导入没写完」，
          而且完全不知道该干什么。8 秒没动静就照实说被占用。 */
       var t = setTimeout(function () {
         fin(rej, new Error('被别的页面占着，打不开'));
@@ -507,7 +507,7 @@
           if (!data) { unread = true; return; }
           if (data.__missing) return;
           /* 读不出来 ≠ 没有数据：__unread / __timeout 两个标记都要一路带到界面上，
-             否则她看到的就是「16 条变 3 条」这种假数字。
+             否则界面上就是「16 条变 3 条」这种假数字。
              （__timeout 以前漏判了，超时的库被当成空表，3 条就是只数了 localStorage） */
           if (data.__unread || data.__timeout) { unread = true; return; }
           Object.keys(data).forEach(function (st) {
@@ -838,7 +838,7 @@
       /* 导入结果必须有回话，而且不能等死。
          以前是 Promise.all 直接 .then——只要有一个写库动作回调不来
          （手机上大记录写入卡住、库被别的标签页占着），toast 就永远不出现，
-         她那边看到的就是「导完没反应、再看还是 3 条」。
+         界面上就是「导完没反应、再看还是 3 条」。
          现在中途有进度提示，这里负责把进度换成最终结果。 */
       var report = function (timedOut) {
         if (reported) return;
@@ -909,7 +909,7 @@
      为什么不再用 deleteDatabase 整库删：
      别的页面（手机上常见的阅读站标签页、桌面图标那个独立窗口）只要还开着这个库，
      删除请求就会被 blocked 挂在浏览器队列里不动；而它后面的所有 open 都得排队，
-     导入于是永远打不开库——她那边看到的就是「说已清除、其实没清」，
+     导入于是永远打不开库——界面上就是「说已清除、其实没清」，
      紧接着导入等二十秒冒一句「可能没写完」。
      清表用的是同版本 open，不升级、不会被 blocked，稳得多，效果一样是 0 条。 */
   function clearAllStores(dbName) {
