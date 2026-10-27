@@ -6,6 +6,7 @@
 
    存储分布：
    - 经济学  localStorage：eco_kb_* / 各模块前缀 / custom_* / ai_assistant_* / ai_cards_*
+             sessionStorage：site_search_* / sj_scroll:*（全站搜索的临时记录）
    - 阅读    localStorage：ekz* / drawn.*（画笔偏好）  IndexedDB：ekz-notes-v2、ekz-notes-db（旧库）
    - 单词    localStorage：dkz.*（chk/mode/pos/view/q 五个键）
    - 数学    localStorage：studyMath*   IndexedDB：study-math-v3（problems/status）
@@ -13,7 +14,8 @@
    导出格式：{ app:'study-hub-backup', version:1, exportedAt, sites:{...} }
    导入语义：备份里带的 key / 记录整块覆盖，本机有而备份没有的不动。
    AI 配置里的 API Key 导出时剔除，导入时保留本机已有的。
-   清除：按站点前缀删 localStorage 对应键，并整库删除 IndexedDB。
+   清除：按站点前缀删 localStorage 对应键，并整库删除 IndexedDB；
+        经济学另有会话级搜索缓存，按 ssPrefix 清当前标签页的 sessionStorage。
    ================================================================ */
 (function () {
   'use strict';
@@ -27,6 +29,10 @@
                  'calc_special_', 'micro_short_', 'macro_short_', 'essay_',
                  'past_exams_', 'custom_cards_', 'custom_chapters_',
                  'ai_assistant_', 'ai_cards_'],
+      /* 全站搜索留下的临时记录（关键词、落点、各页滚动位置）只存在
+         sessionStorage，随标签页关闭自动消失。它们不是学习记录，
+         不计条数、不进备份，只在清除时顺手清一遍 */
+      ssPrefix: ['site_search_', 'sj_scroll:'],
       dbs: []
     },
     {
@@ -958,6 +964,28 @@
       }
     } catch (e) {}
     keys.forEach(function (k) { try { localStorage.removeItem(k); } catch (e) {} });
+    /* 会话级临时记录（经济学站的全站搜索缓存）：
+       sessionStorage 按标签页隔离，这里只能清当前这一页，别的标签页清不到，
+       关掉标签页它们就没了。localStorage 也扫一遍，防止这类键将来改成持久化后漏清 */
+    var ssList = s.ssPrefix || [];
+    if (ssList.length) {
+      /* 先收集再删：边遍历边 removeItem 会让后面的索引整体前移，漏掉一部分键 */
+      try {
+        var ssKeys = [];
+        for (var a = 0; a < sessionStorage.length; a++) {
+          var sk = sessionStorage.key(a);
+          if (sk && hitAny(sk, ssList)) ssKeys.push(sk);
+        }
+        ssKeys.forEach(function (k) { try { sessionStorage.removeItem(k); } catch (e) {} });
+
+        var lsKeys = [];
+        for (var b = 0; b < localStorage.length; b++) {
+          var lk = localStorage.key(b);
+          if (lk && hitAny(lk, ssList)) lsKeys.push(lk);
+        }
+        lsKeys.forEach(function (k) { try { localStorage.removeItem(k); } catch (e) {} });
+      } catch (e) {}
+    }
     /* IndexedDB：有 dataStores 的站只清数据表（题库是内容，保留），
        其余清空全部表——都不删库，理由见 clearAllStores 上面那段 */
     var jobs = (s.dbs || []).map(function (db) {
