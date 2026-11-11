@@ -50,7 +50,11 @@
       aiCfgKeys: ['kb:eco:ai:cfg'],
       /* 内容库与图床库。两张表的主键都是外挂的（键形如 kb:eco:…），
          备份必须连键一起带走，见 dumpStores 的 hubKeyed 格式 */
-      dbs: ['kb-data-v1', 'kb-blobs-v1']
+      dbs: ['kb-data-v1', 'kb-blobs-v1'],
+      /* 正文（含 idb: 引用）在 kb-data-v1，图床在 kb-blobs-v1。
+         导出/计数只带被正文引用的图，孤儿图不进备份，与经济站自身导出一致 */
+      refDb: 'kb-data-v1',
+      blobStore: 'kb-blobs-v1'
     },
     {
       id: 'math', name: '数学三 · 精选错题', short: '数学三',
@@ -176,6 +180,35 @@
   }
   function isBlob(v) {
     return typeof Blob !== 'undefined' && v instanceof Blob;
+  }
+
+  /* 从内容库 dump 取出所有被正文引用的图 id（idb: 之后那段），与经济站 refsIn 同口径 */
+  function refIdsFromDump(dump) {
+    var out = {};
+    if (!dump) return out;
+    Object.keys(dump).forEach(function (st) {
+      var d = dump[st];
+      var rows = (d && d.hubKeyed && Array.isArray(d.rows)) ? d.rows
+               : (Array.isArray(d) ? d : null);
+      if (!rows) return;
+      rows.forEach(function (r) {
+        var v = Array.isArray(r) ? r[1] : r;
+        if (typeof v !== 'string') return;
+        var re = /idb:([A-Za-z0-9_:-]+)/g, m;
+        while ((m = re.exec(v))) out[m[1]] = true;
+      });
+    });
+    return out;
+  }
+  /* 图床 dump 只留正文引用到的图，孤儿图不进备份，与经济站导出一致 */
+  function keepReferencedBlobs(dump, refs) {
+    if (!dump || !refs) return dump;
+    Object.keys(dump).forEach(function (st) {
+      var d = dump[st];
+      if (!d || !d.hubKeyed || !Array.isArray(d.rows)) return;
+      d.rows = d.rows.filter(function (r) { return refs[r[0]]; });
+    });
+    return dump;
   }
 
   /* IDB 表的行数，两种备份形态通用 */
@@ -643,19 +676,28 @@
     return Promise.all(s.dbs.map(function (d) { return idbDump(d, s.dataStores); }))
       .then(function (dumps) {
         var unread = false;
-        dumps.forEach(function (data) {
+        /* 先算出被正文引用的图集合，图床只数这些，孤儿图不计入，与经济站导出一致 */
+        var refs = null;
+        if (s.refDb) {
+          var rd = dumps[s.dbs.indexOf(s.refDb)];
+          if (rd && !rd.__missing && !rd.__timeout && !rd.__unread) refs = refIdsFromDump(rd);
+        }
+        dumps.forEach(function (data, idx) {
           if (!data) { unread = true; return; }
           if (data.__missing) return;
           /* 读不出来 ≠ 没有数据：__unread / __timeout 两个标记都要一路带到界面上，
              否则界面上就是「16 条变 3 条」这种假数字。
              （__timeout 以前漏判了，超时的库被当成空表，3 条就是只数了 localStorage） */
           if (data.__unread || data.__timeout) { unread = true; return; }
-          Object.keys(data).forEach(function (st) {
-            var rc = storeRowCount(data[st]);
+          /* 图床只保留被正文引用的图，孤儿图不计入条数与体积 */
+          var d2 = (s.blobStore && s.dbs[idx] === s.blobStore && refs)
+            ? keepReferencedBlobs(data, refs) : data;
+          Object.keys(d2).forEach(function (st) {
+            var rc = storeRowCount(d2[st]);
             if (!rc) return;
             cnt += rc;
             /* 图片 base64 的文本长度就是它在备份文件里的真体积 */
-            bytes += utf8Len(JSON.stringify(Array.isArray(data[st]) ? data[st] : data[st].rows));
+            bytes += utf8Len(JSON.stringify(Array.isArray(d2[st]) ? d2[st] : d2[st].rows));
           });
         });
         return { cnt: cnt, bytes: bytes, partial: unread };
@@ -813,15 +855,35 @@
       pack.localStorage = ls;
       if (s.dbs.length) {
         pack.indexedDB = {};
+        var refs = null;
         for (var j = 0; j < s.dbs.length; j++) {
-          var dump = await idbDump(s.dbs[j], s.dataStores);
+          var dbName = s.dbs[j];
+          var dump;
+          /* 图床导出前先按正文引用过滤，只带被引用的图，孤儿图不进备份 */
+          if (s.blobStore && dbName === s.blobStore) {
+            if (!refs && s.refDb) {
+              var refDump = await idbDump(s.refDb, s.dataStores);
+              if (refDump && !refDump.__missing && !refDump.__timeout && !refDump.__unread) {
+                refs = refIdsFromDump(refDump);
+              }
+            }
+            var rawDump = await idbDump(dbName, s.dataStores);
+            dump = (refs && rawDump && !rawDump.__timeout && !rawDump.__unread)
+              ? keepReferencedBlobs(rawDump, refs) : rawDump;
+          } else {
+            dump = await idbDump(dbName, s.dataStores);
+            if (dump && !dump.__missing && !dump.__timeout && !dump.__unread
+                && s.refDb && dbName === s.refDb) {
+              refs = refIdsFromDump(dump);
+            }
+          }
           /* 读不出来就别把空壳写进备份文件，存 null 让导入端跳过；
              同时记下来，最后必须告诉她这份备份缺了东西 */
           if (!dump || dump.__timeout || dump.__unread) {
             incomplete.push(s.short);
-            pack.indexedDB[s.dbs[j]] = null;
+            pack.indexedDB[dbName] = null;
           } else {
-            pack.indexedDB[s.dbs[j]] = dump;
+            pack.indexedDB[dbName] = dump;
           }
         }
       }
@@ -906,7 +968,20 @@
         Object.keys(it.pack.localStorage || {}).forEach(function (k) {
           if (lsRecord(k, it.site)) lsOk[k] = 1;
         });
-        var cnt = countOf({ localStorage: lsOk, indexedDB: it.pack.indexedDB });
+        var idb = it.pack.indexedDB || {};
+        /* 图床只数被正文引用到的图，孤儿图不算，与导出一致 */
+        if (it.site.blobStore && it.site.refDb && idb[it.site.refDb] && idb[it.site.blobStore]) {
+          var rd = idb[it.site.refDb];
+          if (!rd.__missing && !rd.__timeout && !rd.__unread) {
+            var blobDump = idb[it.site.blobStore];
+            if (blobDump && !blobDump.__missing) {
+              var filtered = keepReferencedBlobs(JSON.parse(JSON.stringify(blobDump)), refIdsFromDump(rd));
+              idb = Object.assign({}, idb);
+              idb[it.site.blobStore] = filtered;
+            }
+          }
+        }
+        var cnt = countOf({ localStorage: lsOk, indexedDB: idb });
         total += cnt;
         lines.push({ name: it.site.name, cnt: cnt });
       });
@@ -978,6 +1053,13 @@
         Object.keys(dbs).forEach(function (dbName) {
           var data = dbs[dbName];
           if (!data || data.__missing) return;
+          /* 图床只恢复被正文引用的图，孤儿图不进库，与导出一致 */
+          if (s.blobStore && dbName === s.blobStore && s.refDb) {
+            var rd = pack.indexedDB[s.refDb];
+            if (rd && !rd.__missing && !rd.__timeout && !rd.__unread) {
+              data = keepReferencedBlobs(data, refIdsFromDump(rd));
+            }
+          }
           idbJobs.push(idbRestore(dbName, data).then(function (n) {
             done += n;
           }, function (e) {
