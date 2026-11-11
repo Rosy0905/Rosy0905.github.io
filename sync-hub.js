@@ -5,16 +5,23 @@
    天然共享，所以主站可以直接代读代写，不需要各站配合。
 
    存储分布：
-   - 经济学  localStorage：eco_kb_* / 各模块前缀 / custom_* / ai_assistant_* / ai_cards_*
+   - 经济学  localStorage：kb:eco:*（框架键，三段式）+ ai_assistant_*（AI 组件按
+             原版键名双写的兼容键）
+             IndexedDB：kb-data-v1 / kv（笔记、收藏、卡片、对话历史等内容类）
+                        kb-blobs-v1 / blobs（图片二进制）
              sessionStorage：site_search_* / sj_scroll:*（全站搜索的临时记录）
    - 阅读    localStorage：ekz* / drawn.*（画笔偏好）  IndexedDB：ekz-notes-v2、ekz-notes-db（旧库）
    - 单词    localStorage：dkz.*（chk/mode/pos/view/q 五个键）
    - 数学    localStorage：studyMath*   IndexedDB：study-math-v3（problems/status）
 
-   导出格式：{ app:'study-hub-backup', version:1, exportedAt, sites:{...} }
+   备份格式：{ app:'study-hub-backup', version:1, exportedAt, sites:{...} }
+   IDB 表两种形态：主键在值里的（数学/阅读，keyPath）存纯值数组；
+   主键外挂的（经济学框架站，键形如 kb:eco:…）存 { hubKeyed:1, rows:[[键,值]…] }，
+   值是图片 Blob 的转 base64 存 [键, 类型, base64] 三元组，导入时转回来。
    导入语义：备份里带的 key / 记录整块覆盖，本机有而备份没有的不动。
    AI 配置里的 API Key 导出时剔除，导入时保留本机已有的。
-   清除：按站点前缀删 localStorage 对应键，并整库删除 IndexedDB；
+   清除：按站点前缀删 localStorage 对应键，并清空 IndexedDB 各表（不删库，
+        删库会被占着连接的页面堵死，见 clearAllStores 的说明）；
         经济学另有会话级搜索缓存，按 ssPrefix 清当前标签页的 sessionStorage。
    ================================================================ */
 (function () {
@@ -25,15 +32,19 @@
   var SITES = [
     {
       id: 'econ', name: '南开经济学 · 知识库', short: '经济学',
-      lsPrefix: ['eco_kb_', 'micro_recite_', 'macro_recite_', 'calc_key_',
-                 'calc_special_', 'micro_short_', 'macro_short_', 'essay_',
-                 'past_exams_', 'custom_cards_', 'custom_chapters_',
-                 'ai_assistant_', 'ai_cards_'],
+      /* 2026-11-11 起是框架版：键全部走 kb:eco: 三段式（框架键），
+         ai_assistant_* 是 AI 组件按原版键名双写的兼容键，跟着一起备份与清除。
+         旧站那批 eco_kb_* / custom_* 前缀已废弃，不再收集 */
+      lsPrefix: ['kb:eco:', 'ai_assistant_'],
       /* 全站搜索留下的临时记录（关键词、落点、各页滚动位置）只存在
          sessionStorage，随标签页关闭自动消失。它们不是学习记录，
          不计条数、不进备份，只在清除时顺手清一遍 */
       ssPrefix: ['site_search_', 'sj_scroll:'],
-      dbs: []
+      /* AI 配置键：导出剔 API Key、导入保留本机 Key（stripKey / 导入段都用） */
+      aiCfgKeys: ['kb:eco:ai:cfg'],
+      /* 内容库与图床库。两张表的主键都是外挂的（键形如 kb:eco:…），
+         备份必须连键一起带走，见 dumpStores 的 hubKeyed 格式 */
+      dbs: ['kb-data-v1', 'kb-blobs-v1']
     },
     {
       id: 'math', name: '数学三 · 精选错题', short: '数学三',
@@ -130,6 +141,43 @@
   }
   function pad2(n) { return String(n).padStart(2, '0'); }
   function $(id) { return document.getElementById(id); }
+
+  /* ---------- base64 ↔ Blob（经济学站图床的备份通路） ----------
+     图床的 blobs 表里存的是二进制 Blob，JSON 序列化会把 Blob 变成空对象，
+     所以备份时逐张转 base64 文本（体积膨胀约三分之一），导入时转回来。
+     与经济学站自己导出的做法一致（engine/sync/core.js 的 blobToB64 / b64ToBlob）。 */
+  function b64ToBlob(b64, type) {
+    try {
+      var bin = atob(b64);
+      var u8 = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      return new Blob([u8], { type: type || 'application/octet-stream' });
+    } catch (e) { return null; }
+  }
+  function blobToB64(blob) {
+    return new Promise(function (res) {
+      try {
+        var fr = new FileReader();
+        fr.onload = function () {
+          var s = String(fr.result || '');
+          var i = s.indexOf(',');
+          res(i >= 0 ? s.slice(i + 1) : s);
+        };
+        fr.onerror = function () { res(null); };
+        fr.readAsDataURL(blob);
+      } catch (e) { res(null); }
+    });
+  }
+  function isBlob(v) {
+    return typeof Blob !== 'undefined' && v instanceof Blob;
+  }
+
+  /* IDB 表的行数，两种备份形态通用 */
+  function storeRowCount(d) {
+    if (Array.isArray(d)) return d.length;
+    if (d && d.hubKeyed && Array.isArray(d.rows)) return d.rows.length;
+    return 0;
+  }
 
   /* ---------- 探库：库到底存不存在 ----------
      【2026-10-25 修复】以前读数据直接 indexedDB.open(dbName) 不带版本号，
@@ -238,9 +286,52 @@
             }
           };
           try {
-            var rq = db.transaction(store, 'readonly').objectStore(store).getAll();
-            rq.onsuccess = function () { out[store] = rq.result || []; settle(); };
-            rq.onerror = function () { bad = true; settle(); };
+            var tx = db.transaction(store, 'readonly');
+            var os = tx.objectStore(store);
+            if (os.keyPath) {
+              /* 主键在值里（数学/阅读站，keyPath='id'）：沿用老格式，纯值数组 */
+              var rq = os.getAll();
+              rq.onsuccess = function () { out[store] = rq.result || []; settle(); };
+              rq.onerror = function () { bad = true; settle(); };
+            } else {
+              /* 主键外挂（经济学框架站，键形如 kb:eco:…）：键就是身份，
+                 getAll 只给值不给键，必须 getAllKeys+getAll 成对读
+                 （同一事务里两发请求按键序一一对应）。值里有 Blob 的
+                 （图床）逐张转 base64，转不出来的按「没读全」处理 */
+              var keys = null, vals = null;
+              var pair = function () {
+                if (!keys || !vals) return;
+                if (!keys.length) { out[store] = { hubKeyed: 1, rows: [] }; settle(); return; }
+                var ks = keys, vs = vals;
+                var hasBin = vs.some(isBlob);
+                if (!hasBin) {
+                  out[store] = { hubKeyed: 1, rows: ks.map(function (k, i) { return [k, vs[i]]; }) };
+                  settle();
+                  return;
+                }
+                Promise.all(vs.map(function (v) {
+                  return isBlob(v) ? blobToB64(v) : Promise.resolve(null);
+                })).then(function (b64s) {
+                  var rows = [];
+                  ks.forEach(function (k, i) {
+                    if (isBlob(vs[i])) {
+                      /* 某张图转 base64 失败：这库算没读全，绝不装完整 */
+                      if (!b64s[i]) { bad = true; return; }
+                      rows.push([k, vs[i].type || 'image/png', b64s[i]]);
+                    } else {
+                      rows.push([k, vs[i]]);
+                    }
+                  });
+                  out[store] = { hubKeyed: 1, rows: rows };
+                  settle();
+                }, function () { bad = true; settle(); });
+              };
+              var kq = os.getAllKeys(), vq = os.getAll();
+              kq.onsuccess = function () { keys = kq.result || []; pair(); };
+              vq.onsuccess = function () { vals = vq.result || []; pair(); };
+              kq.onerror = function () { bad = true; settle(); };
+              vq.onerror = function () { bad = true; settle(); };
+            }
           } catch (e) {
             bad = true; settle();
           }
@@ -252,8 +343,10 @@
   /* ---------- IndexedDB 写入：按记录 put 覆盖 ---------- */
   /* 打开库并把缺的表补出来。
      ver 给了就按该版本升级建表；没给就按自然版本打开（库不存在时浏览器从 0 升 1，
-     onupgradeneeded 照样触发，表能建出来）。 */
-  function openForWrite(dbName, storeNames, ver) {
+     onupgradeneeded 照样触发，表能建出来）。
+     keyless：这些表建的时候不带 keyPath（经济学框架站的表主键外挂，
+     建成了 keyPath='id' 站里自己的 put(值, 键) 会全部失败） */
+  function openForWrite(dbName, storeNames, ver, keyless) {
     return new Promise(function (res, rej) {
       var spent = false;
       var fin = function (fn, v) { if (spent) return; spent = true; clearTimeout(t); fn(v); };
@@ -268,7 +361,10 @@
         var db = openReq.result;
         storeNames.forEach(function (s) {
           if (!db.objectStoreNames.contains(s)) {
-            try { db.createObjectStore(s, { keyPath: 'id' }); } catch (e) {}
+            try {
+              if (keyless && keyless.indexOf(s) >= 0) db.createObjectStore(s);
+              else db.createObjectStore(s, { keyPath: 'id' });
+            } catch (e) {}
           }
         });
       };
@@ -285,8 +381,11 @@
     var jobs = [];
     var skipped = [];
     Object.keys(data).forEach(function (store) {
-      var rows = data[store];
-      if (!Array.isArray(rows)) return;
+      var d = data[store];
+      var rows = null, keyed = false;
+      if (Array.isArray(d)) { rows = d; }
+      else if (d && d.hubKeyed && Array.isArray(d.rows)) { rows = d.rows; keyed = true; }
+      if (!rows) return;
       if (names.indexOf(store) < 0) { if (rows.length) skipped.push(store); return; }
       if (!rows.length) return;
       jobs.push(new Promise(function (ok, no) {
@@ -296,7 +395,28 @@
         tx.onabort = function () { no(tx.error || new Error('写入被中止')); };
         try {
           var st = tx.objectStore(store);
-          rows.forEach(function (r) { try { st.put(r); } catch (e) {} });
+          var badRows = 0;
+          rows.forEach(function (r) {
+            try {
+              if (keyed) {
+                /* [键, 类型, base64] 是图片三元组，转回 Blob 再落库；
+                   [键, 值] 是普通记录，键外挂必须显式带键 */
+                if (r.length === 3) {
+                  var blob = b64ToBlob(r[2], r[1]);
+                  if (!blob) throw new Error('图片数据损坏');
+                  st.put(blob, r[0]);
+                } else {
+                  st.put(r[1], r[0]);
+                }
+              } else {
+                st.put(r);
+              }
+            } catch (e) { badRows++; }
+          });
+          if (badRows) {
+            try { tx.abort(); } catch (_) {}
+            no(new Error(badRows + ' 条数据损坏，写不进去'));
+          }
         } catch (e) { try { tx.abort(); } catch (_) {} no(e); }
       }));
     });
@@ -313,7 +433,11 @@
   function idbRestore(dbName, data) {
     /* 备份里真有数据的表才算「需要」 */
     var want = Object.keys(data).filter(function (k) {
-      return Array.isArray(data[k]) && data[k].length;
+      return storeRowCount(data[k]) > 0;
+    });
+    /* 这些表的主键是外挂的（hubKeyed 形态），建表时不能带 keyPath */
+    var keyless = Object.keys(data).filter(function (k) {
+      return data[k] && data[k].hubKeyed;
     });
     /* 这个库备份里一条都没有：不读也不写，尤其不能开库，
        开了就会凭空多出一个空库（阅读站那个旧库就是这么来的） */
@@ -321,19 +445,19 @@
     return idbExists(dbName).then(function (ok) {
       /* false 确定不存在；null 是探不动（不知道）——两种都按「带着表去开」，
          库不存在会顺手建好表，库在就继续往下查缺不缺表 */
-      if (ok === false) return openForWrite(dbName, want, null);
-      return openForWrite(dbName, [], null).then(function (db) {
+      if (ok === false) return openForWrite(dbName, want, null, keyless);
+      return openForWrite(dbName, [], null, keyless).then(function (db) {
         var missing = want.filter(function (s) { return !db.objectStoreNames.contains(s); });
         if (!missing.length) return db;
         /* 库在但缺表（统计体检造出来的空壳就是这种）→ 升一版把表补齐再写 */
         var nextVer = db.version + 1;
         try { db.close(); } catch (e) {}
-        return openForWrite(dbName, missing, nextVer);
+        return openForWrite(dbName, missing, nextVer, keyless);
       });
     }).then(function (db) {
       var total = 0;
       Object.keys(data).forEach(function (st) {
-        if (Array.isArray(data[st])) total += data[st].length;
+        total += storeRowCount(data[st]);
       });
       return writeStores(db, data).then(function () {
         try { db.close(); } catch (e) {}
@@ -381,7 +505,7 @@
       Object.keys(pack.indexedDB).forEach(function (db) {
         var stores = pack.indexedDB[db] || {};
         Object.keys(stores).forEach(function (s) {
-          if (Array.isArray(stores[s])) n += stores[s].length;
+          n += storeRowCount(stores[s]);
         });
       });
     }
@@ -397,7 +521,11 @@
         n += utf8Len(db);
         var stores = pack.indexedDB[db] || {};
         Object.keys(stores).forEach(function (s) {
-          if (Array.isArray(stores[s])) n += utf8Len(JSON.stringify(stores[s]));
+          var d = stores[s];
+          /* 两种形态按各自进备份文件的样子算：老格式整段序列化，
+             hubKeyed 就算 rows 那段（图片是 base64 文本，长度就是文件里的真体积） */
+          if (Array.isArray(d)) n += utf8Len(JSON.stringify(d));
+          else if (d && d.hubKeyed) n += utf8Len(JSON.stringify(d.rows));
         });
       });
     }
@@ -517,7 +645,11 @@
              （__timeout 以前漏判了，超时的库被当成空表，3 条就是只数了 localStorage） */
           if (data.__unread || data.__timeout) { unread = true; return; }
           Object.keys(data).forEach(function (st) {
-            if (Array.isArray(data[st])) { cnt += data[st].length; bytes += utf8Len(JSON.stringify(data[st])); }
+            var rc = storeRowCount(data[st]);
+            if (!rc) return;
+            cnt += rc;
+            /* 图片 base64 的文本长度就是它在备份文件里的真体积 */
+            bytes += utf8Len(JSON.stringify(Array.isArray(data[st]) ? data[st] : data[st].rows));
           });
         });
         return { cnt: cnt, bytes: bytes, partial: unread };
@@ -638,9 +770,16 @@
     if (e.target === exportOverlay) closeExportDialog();
   });
 
-  function stripKey(k, v) {
+  /* AI 配置键识别：旧前缀（ai_assistant_cfg_*）+ 框架键（kb:eco:ai:cfg 这类） */
+  function isAiCfgKey(k, site) {
+    if (k.indexOf(AI_CFG_PREFIX) === 0) return true;
+    var list = (site && site.aiCfgKeys) || [];
+    return list.some(function (c) { return k.indexOf(c) === 0; });
+  }
+
+  function stripKey(k, v, site) {
     /* AI 配置剔除 API Key，防止泄露 */
-    if (k.indexOf(AI_CFG_PREFIX) !== 0) return v;
+    if (!isAiCfgKey(k, site)) return v;
     try {
       var cfg = JSON.parse(v);
       if (cfg && typeof cfg === 'object') {
@@ -663,7 +802,7 @@
       var pack = collectSite(s, 'export');
       var ls = {};
       Object.keys(pack.localStorage).forEach(function (k) {
-        ls[k] = stripKey(k, pack.localStorage[k]);
+        ls[k] = stripKey(k, pack.localStorage[k], s);
       });
       pack.localStorage = ls;
       if (s.dbs.length) {
@@ -808,7 +947,7 @@
           try {
             var v = ls[k];
             /* 导入 AI 配置时保留本机已有的 API Key */
-            if (k.indexOf(AI_CFG_PREFIX) === 0) {
+            if (isAiCfgKey(k, s)) {
               try {
                 var incoming = JSON.parse(v);
                 var local = localStorage.getItem(k);
