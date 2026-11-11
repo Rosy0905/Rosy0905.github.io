@@ -33,9 +33,15 @@
     {
       id: 'econ', name: '南开经济学 · 知识库', short: '经济学',
       /* 2026-11-11 起是框架版：键全部走 kb:eco: 三段式（框架键），
-         ai_assistant_* 是 AI 组件按原版键名双写的兼容键，跟着一起备份与清除。
-         旧站那批 eco_kb_* / custom_* 前缀已废弃，不再收集 */
+         ai_assistant_* 是 AI 组件按原版键名双写的兼容键——只参与代清，
+         不计数、不进备份，否则总站比站点自己的导出面板多出几条（副本不算数）。
+         kb:eco: 下的内部状态键同理：迁移标记、清空代号、影子抽屉与落库时刻，
+         站点自己的 dump 就排除它们，总站必须同一口径 */
       lsPrefix: ['kb:eco:', 'ai_assistant_'],
+      lsNoRecord: ['ai_assistant_', 'kb:eco:migrated-v1', 'kb:eco:epoch',
+                   'kb:eco:shring', 'kb:eco:sh:', 'kb:eco:cm:'],
+      lsExportSkip: ['ai_assistant_', 'kb:eco:migrated-v1', 'kb:eco:epoch',
+                     'kb:eco:shring', 'kb:eco:sh:', 'kb:eco:cm:'],
       /* 全站搜索留下的临时记录（关键词、落点、各页滚动位置）只存在
          sessionStorage，随标签页关闭自动消失。它们不是学习记录，
          不计条数、不进备份，只在清除时顺手清一遍 */
